@@ -80,7 +80,7 @@ async function handleAuth(request, env) {
   const kv = env.FEEDBACK_KV;
   if (!kv) return json({ ok: false, error: '暂未启用' }, 503);
   const bl = await isBlacklisted(request, env);
-  if (bl) return json({ ok: false, error: '账号已被限制访问' }, 403);
+  if (bl) return json({ ok: false, error: blackMsg(bl) }, 403);
   let body;
   try { body = await request.json(); } catch { return json({ ok: false, error: '请求格式错误' }, 400); }
   const action = body.action === 'register' ? 'register' : 'login';
@@ -346,7 +346,7 @@ async function handleAdminDeleteUser(request, env){
 async function handleChat(request, env) {
  try {
   const bl = await isBlacklisted(request, env);
-  if (bl) return json({ ok: false, error: '账号已被限制访问' }, 403);
+  if (bl) return json({ ok: false, error: blackMsg(bl) }, 403);
   const username = await getUserByToken(request, env);
   if (!username) return json({ ok: false, error: '请先登录' }, 401);
 
@@ -624,19 +624,25 @@ async function handleAdminFeedbackFile(request, env){
     return json({ ok: false, error: '读取失败' }, 500);
   }
 }
+function blackMsg(bl){
+  let m = '大肥鱼不喜欢你！你已被大肥鱼拉黑！🐳';
+  if (bl && bl.reason) m += '（拉黑原因：' + bl.reason + '）';
+  return m;
+}
 async function isBlacklisted(request, env){
   const kv = env.FEEDBACK_KV;
   if (!kv) return null;
   const ip = request.headers.get('cf-connecting-ip') || '';
   const dev = getDeviceId(request);
+  const reasonOf = (b) => { try { return JSON.parse(b).reason || ''; } catch(e){ return ''; } };
   try {
     if (ip) {
       const b = await kv.get('blackip_' + ip);
-      if (b) return { type: 'ip', value: ip };
+      if (b) return { type: 'ip', value: ip, reason: reasonOf(b) };
     }
     if (dev) {
       const b = await kv.get('blackdev_' + dev);
-      if (b) return { type: 'device', value: dev };
+      if (b) return { type: 'device', value: dev, reason: reasonOf(b) };
     }
   } catch(e){}
   return null;
