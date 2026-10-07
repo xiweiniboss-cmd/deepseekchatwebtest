@@ -25,28 +25,34 @@ async function sha256(str) {
 }
 function validUsername(u){ return /^[a-zA-Z]{1,8}$/.test(u); }
 function validPassword(p){ return /^[0-9]{1,10}$/.test(p); }
-// Brave 联网搜索：网页 + 新闻双通道，过滤无意义结果，失败返回 null
-async function braveSearch(query, apiKey) {
-  async function callApi(path) {
+// Tavily 联网搜索（专为 LLM 设计）：新闻 + 网页双通道，失败返回 null
+async function tavilySearch(query, apiKey) {
+  async function callApi(topic, timeRange) {
     try {
-      const r = await fetch('https://api.search.brave.com/res/v1/' + path + '?q=' + encodeURIComponent(query) + '&count=8&search_lang=zh-hans&text_decorations=0', {
-        headers: { 'Accept': 'application/json', 'X-Subscription-Token': apiKey },
+      const r = await fetch('https://api.tavily.com/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+        body: JSON.stringify({
+          query: query,
+          topic: topic,
+          max_results: 5,
+          search_depth: 'basic',
+          include_answer: false,
+          include_raw_content: false,
+          ...(timeRange ? { time_range: timeRange } : {}),
+        }),
       });
       if (!r.ok) return [];
       const j = await r.json();
-      if (path.indexOf('news') === 0) return j.results || [];
-      return (j.web && j.web.results) || [];
+      return j.results || [];
     } catch(e){ return []; }
   }
-  const web = await callApi('web/search');
-  const news = await callApi('news/search');
-  // 新闻优先，其次网页；过滤门户首页类无意义结果
-  const junkRe = /^(www\.)?(google\.[a-z.]+|translate\.google\.[a-z.]+|baidu\.com|bing\.com|yahoo\.com|so\.com|sogou\.com|googleusercontent\.com)\/?([?#].*)?$/i;
+  const news = await callApi('news', 'month');
+  const web = await callApi('general', null);
   const seen = {};
   const all = news.concat(web).filter(function(it){
-    const u = String(it.url || '').replace(/^https?:\/\//, '');
-    if (!u || junkRe.test(u)) return false;
-    if (!(it.title && it.description)) return false;
+    const u = String(it.url || '');
+    if (!u || !it.title) return false;
     const key = u.split('?')[0].toLowerCase();
     if (seen[key]) return false;
     seen[key] = 1;
@@ -54,7 +60,7 @@ async function braveSearch(query, apiKey) {
   }).slice(0, 8);
   if (!all.length) return '（未搜到有效结果）';
   return all.map(function(it, i){
-    return '[' + (i+1) + '] ' + (it.title || '') + '\n' + (it.description || '').slice(0, 300) + '\n来源：' + (it.url || '');
+    return '[' + (i+1) + '] ' + (it.title || '') + '\n' + String(it.content || '').slice(0, 400) + '\n来源：' + (it.url || '');
   }).join('\n\n');
 }
 function randToken(){
@@ -350,8 +356,8 @@ async function handleChat(request, env) {
     return json({ ok: false, error: '消息为空' }, 400);
   // 联网搜索：用 Brave Search 搜最新信息，注入到最后一条用户消息
   if (body.websearch === true) {
-    const braveKey = (env.BRAVE_API_KEY || '').trim();
-    if (!braveKey) return json({ ok: false, error: '联网搜索未配置：请在 Cloudflare Pages → Settings → Environment variables 添加 BRAVE_API_KEY（去 brave.com/search/api 免费申请）' }, 500);
+    const tavilyKey = (env.TAVILY_API_KEY || '').trim();
+    if (!tavilyKey) return json({ ok: false, error: '联网搜索未配置：请在 Cloudflare Pages → Settings → Environment variables 添加 TAVILY_API_KEY（去 tavily.com 免费注册，每月1000次免费）' }, 500);
     let q = '';
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === 'user') {
@@ -362,7 +368,7 @@ async function handleChat(request, env) {
     }
     q = q.trim().slice(0, 300);
     if (!q) return json({ ok: false, error: '消息为空' }, 400);
-    const sr = await braveSearch(q, braveKey);
+    const sr = await tavilySearch(q, tavilyKey);
     if (!sr) return json({ ok: false, error: '联网搜索失败，请稍后重试' }, 502);
     const today = new Date().toISOString().slice(0, 10);
     const ctx = '\n\n【联网搜索结果（' + today + '）】\n' + sr + '\n【要求】请结合以上最新搜索结果回答用户问题，引用信息时标注来源序号。';
