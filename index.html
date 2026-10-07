@@ -99,7 +99,7 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
   <span class="dot"></span>
   <h1>DeepSeek</h1>
   <select id="modelSel">
-    <option value="deepseek-flash">V4.1 Flash（可看图）</option>
+    <option value="deepseek-v4-flash">V4 Flash（可看图）</option>
     <option value="deepseek-v4-pro">V4 Pro（更强）</option>
   </select>
   <button id="histBtn">🕐</button>
@@ -212,7 +212,7 @@ $('input').addEventListener('keydown', function(e){
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
 $('sendBtn').onclick = function(){ sending ? stopGen() : send(); };
-// 图片上传（仅 deepseek-flash 支持看图）
+// 图片上传（仅 deepseek-v4-flash 支持看图）
 var pendingImage = null; // dataURL
 $('imgBtn').onclick = function(){ $('imgInput').click(); };
 $('imgRemove').onclick = function(){ pendingImage = null; $('imgPreview').style.display = 'none'; $('imgInput').value = ''; };
@@ -255,7 +255,7 @@ async function send(){
   if (hint) hint.remove();
   var imgData = pendingImage;
   pendingImage = null; $('imgPreview').style.display = 'none'; $('imgInput').value = '';
-  var useVision = imgData && $('modelSel').value === 'deepseek-flash';
+  var useVision = imgData && $('modelSel').value === 'deepseek-v4-flash';
   if (imgData && !useVision) { showErr('当前模型不支持看图，已忽略图片'); imgData = null; }
   var userContent;
   if (useVision) {
