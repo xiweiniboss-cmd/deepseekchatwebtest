@@ -201,6 +201,7 @@ input{background:#101016;border:1px solid #2c2c36;border-radius:10px;color:#e8e8
 <h2 id="msgTitle" class="hide"></h2><div id="msgList"></div>
 </div>
 <script>
+window.onerror=function(msg,src,line){ var m=document.getElementById('loginMsg'); if(m){ m.style.color='#ff8ba0'; m.textContent='JS错误: '+msg+' (行'+line+')'; } return true; };
 var K='';
 function api(p){ return fetch(p+(p.includes('?')?'&':'?')+'key='+encodeURIComponent(K)).then(function(r){ return r.text().then(function(t){ try{ return JSON.parse(t); }catch(e){ return {ok:false,error:'服务器返回异常:'+t.slice(0,100)}; } }); }).catch(function(e){ return {ok:false,error:'网络错误:'+(e&&e.message||'')}; }); }
 function login(){
@@ -359,7 +360,7 @@ async function handleChat(request, env) {
   if (env.TURNSTILE_SECRET_KEY) {
     if (!tsToken) return json({ ok: false, error: '请先完成人机验证' }, 400);
     const ip = request.headers.get('cf-connecting-ip') || '';
-    const tsOk = await verifyTurnstile(tsToken, ip, env);
+    const tsOk = await verifyTurnstile(tsToken, env.TURNSTILE_SECRET_KEY, ip);
     if (!tsOk) return json({ ok: false, error: '人机验证失败，请重试' }, 400);
   }
   if (kv) await kv.put('chatcool_' + username, String(Date.now()), { expirationTtl: 35 });
