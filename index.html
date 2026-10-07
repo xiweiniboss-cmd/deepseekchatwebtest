@@ -338,6 +338,8 @@ async function send(){
   try {
     var tsToken = '';
     try { if (chatTsId !== null && window.turnstile) tsToken = turnstile.getResponse(chatTsId); } catch(e){}
+    if (thinkOn) curThink = true;
+    if (webOn) curWeb = true;
     var resp = await fetch('/api/chat', {
       method:'POST',
       headers: authHeaders(),
@@ -546,12 +548,13 @@ function bindLogin(){
 }
 var saveTimer=null;
 var curConvId=null, convListCache=[];
+var curThink=false, curWeb=false; // 当前对话是否用过深度思考/联网
 function saveHistory(){
   if(!authToken) return;
   clearTimeout(saveTimer);
   saveTimer=setTimeout(function(){
     if(!messages.length && !curConvId) return;
-    fetch('/api/conv',{method:'POST',headers:authHeaders(),body:JSON.stringify({id:curConvId,messages:messages})})
+    fetch('/api/conv',{method:'POST',headers:authHeaders(),body:JSON.stringify({id:curConvId,messages:messages,think:curThink,web:curWeb})})
     .then(function(r){return r.json();}).then(function(j){
       if(j.ok && j.id && !curConvId){ curConvId=j.id; }
     }).catch(function(){});
@@ -587,6 +590,8 @@ async function openConv(id){
     if(!j.ok) return;
     curConvId=id;
     messages=Array.isArray(j.messages)?j.messages:[];
+    var ce=convListCache.find(function(x){return x.id===id;});
+    curThink=!!(ce&&ce.think); curWeb=!!(ce&&ce.web);
     renderMessages();
   }catch(e){}
 }
@@ -595,13 +600,13 @@ async function delConv(id){
   try{
     await fetch('/api/conv?id='+encodeURIComponent(id),{method:'DELETE',headers:authHeaders()});
     convListCache=convListCache.filter(function(c){return c.id!==id;});
-    if(curConvId===id){ curConvId=null; messages=[]; renderMessages(); }
+    if(curConvId===id){ curConvId=null; messages=[]; curThink=false; curWeb=false; renderMessages(); }
     renderHistList();
   }catch(e){}
 }
 function newConversation(){
   closeHist();
-  curConvId=null; messages=[];
+  curConvId=null; messages=[]; curThink=false; curWeb=false;
   document.getElementById('chat').innerHTML='<div class="hint">👋 新对话开始<br>直接输入问题开始聊天</div>';
 }
 function renderMessages(){
