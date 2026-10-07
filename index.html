@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>DeepSeek 聊天</title>
+<style>
+:root{ --acc:#4D6BFE; --bg:#0f0f13; --card:#1a1a21; --text:#f1f1f3; --muted:#9a9aa3; --user:#2a2a34; }
+*{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html,body{ height:100%; }
+body{ margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; display:flex; flex-direction:column; }
+header{ padding:12px 16px; border-bottom:1px solid #22222b; display:flex; align-items:center; gap:10px; background:var(--bg); position:sticky; top:0; z-index:10; }
+header h1{ font-size:17px; margin:0; font-weight:700; }
+header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
+#modelSel{ margin-left:auto; background:#1a1a21; color:var(--text); border:1px solid #2c2c36; border-radius:10px; font-size:13px; padding:8px 10px; outline:none; }
+#newBtn{ background:#1a1a21; color:var(--text); border:1px solid #2c2c36; border-radius:10px; font-size:13px; padding:8px 12px; cursor:pointer; }
+#chat{ flex:1; overflow-y:auto; padding:16px 14px 12px; display:flex; flex-direction:column; gap:14px; max-width:760px; width:100%; margin:0 auto; }
+.msg{ max-width:88%; padding:11px 14px; border-radius:16px; font-size:15px; line-height:1.75; word-break:break-word; white-space:pre-wrap; }
+.msg.user{ align-self:flex-end; background:var(--acc); color:#fff; border-bottom-right-radius:6px; }
+.msg.ai{ align-self:flex-start; background:var(--card); border-bottom-left-radius:6px; }
+.msg.ai pre{ background:#101016; padding:10px; border-radius:8px; overflow-x:auto; font-size:13px; }
+.msg.ai code{ font-family:ui-monospace,Menlo,monospace; font-size:13px; }
+.msg .think{ color:var(--muted); font-size:13px; border-left:3px solid #2c2c36; padding-left:10px; margin-bottom:8px; white-space:pre-wrap; }
+.msg .think.done{ font-size:12px; }
+.cursor::after{ content:"▍"; animation:blink 1s infinite; color:var(--acc); }
+@keyframes blink{ 50%{ opacity:0; } }
+#inputBar{ padding:10px 14px calc(10px + env(safe-area-inset-bottom)); border-top:1px solid #22222b; background:var(--bg); }
+#inputWrap{ max-width:760px; margin:0 auto; display:flex; gap:8px; align-items:flex-end; }
+#input{ flex:1; background:#1a1a21; border:1px solid #2c2c36; border-radius:14px; color:var(--text); font-size:15px; padding:12px 14px; outline:none; resize:none; max-height:120px; font-family:inherit; }
+#input:focus{ border-color:var(--acc); }
+#sendBtn{ flex:0 0 52px; height:48px; border:none; border-radius:14px; background:var(--acc); color:#fff; font-size:18px; cursor:pointer; }
+#sendBtn:disabled{ opacity:.5; }
+#sendBtn.stop{ background:#e5484d; }
+.hint{ text-align:center; color:var(--muted); font-size:12px; padding:20px; line-height:2; }
+.err{ align-self:center; background:rgba(229,72,77,.12); border:1px solid rgba(229,72,77,.4); color:#ff8ba0; font-size:13px; border-radius:12px; padding:10px 16px; max-width:88%; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot"></span>
+  <h1>DeepSeek</h1>
+  <select id="modelSel">
+    <option value="deepseek-chat">V3 对话</option>
+    <option value="deepseek-reasoner">R1 推理</option>
+  </select>
+  <button id="newBtn">新对话</button>
+</header>
+<div id="chat">
+  <div class="hint">👋 你好，我是 DeepSeek<br>直接输入问题开始聊天，支持流式输出</div>
+</div>
+<div id="inputBar">
+  <div id="inputWrap">
+    <textarea id="input" rows="1" placeholder="输入消息…"></textarea>
+    <button id="sendBtn">➤</button>
+  </div>
+</div>
+<script>
+var $ = function(id){ return document.getElementById(id); };
+var messages = []; // {role, content}
+var aborter = null;
+var sending = false;
+
+// 简单 markdown：代码块 + 行内代码 + 换行
+function md(t){
+  var esc = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  esc = esc.replace(/```(\w*)\n([\s\S]*?)```/g, function(m, lang, code){
+    return '<pre><code>' + code.replace(/^\n+|\n+$/g,'') + '</code></pre>';
+  });
+  esc = esc.replace(/`([^`\n]+)`/g, '<code style="background:#101016;padding:2px 6px;border-radius:6px">$1</code>');
+  return esc;
+}
+function addMsg(role, html){
+  var d = document.createElement('div');
+  d.className = 'msg ' + role;
+  if (html) d.innerHTML = html;
+  $('chat').appendChild(d);
+  $('chat').scrollTop = $('chat').scrollHeight;
+  return d;
+}
+function showErr(t){
+  var d = document.createElement('div');
+  d.className = 'err'; d.textContent = t;
+  $('chat').appendChild(d);
+  $('chat').scrollTop = $('chat').scrollHeight;
+}
+$('newBtn').onclick = function(){
+  if (sending) stopGen();
+  messages = [];
+  $('chat').innerHTML = '<div class="hint">👋 新对话开始<br>直接输入问题开始聊天</div>';
+};
+$('input').addEventListener('input', function(){
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+$('input').addEventListener('keydown', function(e){
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+$('sendBtn').onclick = function(){ sending ? stopGen() : send(); };
+function stopGen(){
+  if (aborter) aborter.abort();
+}
+async function send(){
+  var text = $('input').value.trim();
+  if (!text || sending) return;
+  var hint = document.querySelector('.hint');
+  if (hint) hint.remove();
+  messages.push({ role:'user', content:text });
+  addMsg('user', md(text));
+  $('input').value = ''; $('input').style.height = 'auto';
+
+  sending = true;
+  var btn = $('sendBtn'); btn.textContent = '■'; btn.classList.add('stop');
+  var aiDiv = addMsg('ai', '');
+  var thinkDiv = null, bodyDiv = null;
+  var thinkText = '', bodyText = '';
+  var isReasoner = $('modelSel').value === 'deepseek-reasoner';
+  aborter = new AbortController();
+  try {
+    var resp = await fetch('/api/chat', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ model: $('modelSel').value, messages: messages }),
+      signal: aborter.signal,
+    });
+    if (!resp.ok) {
+      var ej = await resp.json().catch(function(){ return {}; });
+      throw new Error(ej.error || ('请求失败(' + resp.status + ')'));
+    }
+    var reader = resp.body.getReader();
+    var dec = new TextDecoder();
+    var buf = '';
+    aiDiv.classList.add('cursor');
+    while (true) {
+      var r = await reader.read();
+      if (r.done) break;
+      buf += dec.decode(r.value, { stream:true });
+      var lines = buf.split('\n');
+      buf = lines.pop();
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].trim();
+        if (!line || line.indexOf('data:') !== 0) continue;
+        var payload = line.slice(5).trim();
+        if (payload === '[DONE]') break;
+        try {
+          var j = JSON.parse(payload);
+          var delta = (((j.choices||[])[0]||{}).delta) || {};
+          if (delta.reasoning_content) {
+            thinkText += delta.reasoning_content;
+            if (!thinkDiv) { thinkDiv = document.createElement('div'); thinkDiv.className = 'think'; aiDiv.appendChild(thinkDiv); }
+            thinkDiv.textContent = '💭 思考中…\n' + thinkText.slice(-800);
+          }
+          if (delta.content) {
+            bodyText += delta.content;
+            if (!bodyDiv) { bodyDiv = document.createElement('div'); aiDiv.appendChild(bodyDiv); }
+            bodyDiv.innerHTML = md(bodyText);
+          }
+        } catch(e){}
+      }
+      $('chat').scrollTop = $('chat').scrollHeight;
+    }
+    if (thinkDiv) { thinkDiv.className = 'think done'; thinkDiv.textContent = '💭 思考过程（已收起）'; thinkDiv.title = thinkText; }
+    aiDiv.classList.remove('cursor');
+    messages.push({ role:'assistant', content: bodyText });
+  } catch(e) {
+    aiDiv.classList.remove('cursor');
+    if (e.name === 'AbortError') {
+      if (bodyText) messages.push({ role:'assistant', content: bodyText });
+      else aiDiv.remove();
+    } else {
+      aiDiv.remove();
+      showErr(e.message || '请求失败');
+    }
+  }
+  sending = false;
+  btn.textContent = '➤'; btn.classList.remove('stop');
+  aborter = null;
+}
+</script>
+</body>
+</html>
