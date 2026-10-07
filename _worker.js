@@ -336,11 +336,31 @@ async function handleAdminDeleteUser(request, env){
 async function handleChat(request, env) {
   const username = await getUserByToken(request, env);
   if (!username) return json({ ok: false, error: '请先登录' }, 401);
-  const apiKey = (env.DEEPSEEK_API_KEY || '').trim();
-  if (!apiKey) return json({ ok: false, error: '未配置 DeepSeek API Key：请在 Cloudflare Pages → Settings → Environment variables 添加 DEEPSEEK_API_KEY（重新部署后生效）' }, 500);
 
   let body;
   try { body = await request.json(); } catch { return json({ ok: false, error: '请求格式错误' }, 400); }
+
+  // 30秒发送冷却
+  const kv = env.FEEDBACK_KV;
+  if (kv) {
+    const last = await kv.get('chatcool_' + username);
+    if (last) {
+      const remain = 30 - Math.floor((Date.now() - parseInt(last, 10)) / 1000);
+      if (remain > 0) return json({ ok: false, error: '发送太快了，请 ' + remain + ' 秒后再试', remain }, 429);
+    }
+  }
+  // 每次发送都要 Turnstile 验证
+  const tsToken = String(body.turnstile || '').trim();
+  if (env.TURNSTILE_SECRET_KEY) {
+    if (!tsToken) return json({ ok: false, error: '请先完成人机验证' }, 400);
+    const ip = request.headers.get('cf-connecting-ip') || '';
+    const tsOk = await verifyTurnstile(tsToken, ip, env);
+    if (!tsOk) return json({ ok: false, error: '人机验证失败，请重试' }, 400);
+  }
+  if (kv) await kv.put('chatcool_' + username, String(Date.now()), { expirationTtl: 35 });
+
+  const apiKey = (env.DEEPSEEK_API_KEY || '').trim();
+  if (!apiKey) return json({ ok: false, error: '未配置 DeepSeek API Key：请在 Cloudflare Pages → Settings → Environment variables 添加 DEEPSEEK_API_KEY（重新部署后生效）' }, 500);
   const model = body.model === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-flash';
   const messages = Array.isArray(body.messages) ? body.messages.slice(-30) : [];
   if (!messages.length || !messages.some(function(m){ return m.role === 'user'; }))

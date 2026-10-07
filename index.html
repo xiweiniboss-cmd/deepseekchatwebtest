@@ -90,6 +90,8 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 .hist-item .d{ font-size:12px; color:var(--muted); display:flex; justify-content:space-between; }
 .hist-item .del{ color:#ff8ba0; font-size:12px; padding:2px 6px; }
 #newConvBtn{ margin:10px; background:var(--acc); color:#fff; border:none; border-radius:12px; padding:12px; font-size:15px; cursor:pointer; font-weight:600; }
+#chatTsWrap{ display:flex; justify-content:center; padding:6px 0 2px; min-height:70px; }
+#chatTsWrap .ts-tip{ font-size:12px; color:var(--muted); text-align:center; padding:8px; }
 </style>
 </head>
 <body>
@@ -107,6 +109,7 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 <div id="chat">
   <div class="hint">👋 你好，我是 DeepSeek<br>直接输入问题开始聊天，支持流式输出</div>
 </div>
+<div id="chatTsWrap"><div id="chatTs"></div></div>
 <div id="inputBar">
   <div id="inputWrap">
     <button id="imgBtn" title="上传图片">🖼</button>
@@ -274,10 +277,12 @@ async function send(){
   var isReasoner = $('modelSel').value === 'deepseek-reasoner';
   aborter = new AbortController();
   try {
+    var tsToken = '';
+    try { if (chatTsId !== null && window.turnstile) tsToken = turnstile.getResponse(chatTsId); } catch(e){}
     var resp = await fetch('/api/chat', {
       method:'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ model: $('modelSel').value, messages: messages }),
+      body: JSON.stringify({ model: $('modelSel').value, messages: messages, turnstile: tsToken }),
       signal: aborter.signal,
     });
     if (!resp.ok) {
@@ -333,6 +338,7 @@ async function send(){
   sending = false;
   btn.textContent = '➤'; btn.classList.remove('stop');
   aborter = null;
+  try { if (chatTsId !== null && window.turnstile) turnstile.reset(chatTsId); } catch(e){}
   saveHistory();
 }
 
@@ -357,6 +363,25 @@ function renderFbTs(){
       fbTsId = turnstile.render('#fbTs', { sitekey: j.siteKey, theme: 'dark' });
     }
   }).catch(function(){});
+}
+var chatTsId = null;
+function renderChatTs(){
+  fetch('/api/turnstile-key').then(function(r){return r.json()}).then(function(j){
+    var el = document.getElementById('chatTs');
+    if (j.siteKey && el && el.children.length === 0 && window.turnstile) {
+      chatTsId = turnstile.render('#chatTs', { sitekey: j.siteKey, theme: 'dark' });
+    } else if (!j.siteKey && el) {
+      el.innerHTML = '<div class="ts-tip">未配置验证（可直接发送）</div>';
+    }
+  }).catch(function(){});
+}
+function ensureChatTs(){
+  if (!window.turnstile) {
+    var sc = document.createElement('script');
+    sc.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
+    sc.onload = renderChatTs;
+    document.head.appendChild(sc);
+  } else renderChatTs();
 }
 $('fbCancel').onclick = function(){ $('fbWrap').classList.remove('show'); };
 document.querySelector('#fbWrap .backdrop').onclick = function(){ $('fbWrap').classList.remove('show'); };
@@ -527,6 +552,7 @@ bindLogin();
   var nb=document.getElementById('newBtn'); if(nb) nb.onclick=function(){ newConversation(); };
   var hb=document.getElementById('histBtn'); if(hb) hb.onclick=function(){ openHist(); };
 })();
+ensureChatTs();
 if(authToken&&authUser){ hideLogin(); var _b=document.getElementById('userBadge'); if(_b) _b.textContent='👤 '+authUser; loadHistory(); }
 else{ showLogin(); }
 </script>
