@@ -40,6 +40,9 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 #sendBtn{ flex:0 0 52px; height:48px; border:none; border-radius:14px; background:var(--acc); color:#fff; font-size:18px; cursor:pointer; }
 #sendBtn:disabled{ opacity:.5; }
 #sendBtn.stop{ background:#e5484d; }
+.msg-actions{ display:flex; gap:8px; margin-top:8px; }
+.act-btn{ background:transparent; border:1px solid #2c2c36; color:var(--muted); border-radius:8px; font-size:12px; padding:5px 10px; cursor:pointer; }
+.act-btn:active{ background:#2a2a34; }
 .hint{ text-align:center; color:var(--muted); font-size:12px; padding:20px; line-height:2; }
 .err{ align-self:center; background:rgba(229,72,77,.12); border:1px solid rgba(229,72,77,.4); color:#ff8ba0; font-size:13px; border-radius:12px; padding:10px 16px; max-width:88%; }
 #fbBtn{ position:fixed; right:18px; bottom:calc(90px + env(safe-area-inset-bottom)); width:52px; height:52px;
@@ -224,7 +227,7 @@ function md(t){
   esc = esc.replace(/`([^`\n]+)`/g, '<code style="background:#101016;padding:2px 6px;border-radius:6px">$1</code>');
   return esc;
 }
-function addMsg(role, html, ts){
+function addMsg(role, html, ts, msgIdx){
   var d = document.createElement('div');
   d.className = 'msg ' + role;
   if (html) d.innerHTML = html;
@@ -234,9 +237,61 @@ function addMsg(role, html, ts){
     tm.textContent = fmtTime(ts);
     d.appendChild(tm);
   }
+  if (role === 'ai' && typeof msgIdx === 'number') attachActions(d, msgIdx);
   $('chat').appendChild(d);
   $('chat').scrollTop = $('chat').scrollHeight;
   return d;
+}
+// ---------- AI消息操作：复制 / 重新回答 ----------
+function attachActions(div, idx){
+  if (!div || div.querySelector('.msg-actions')) return;
+  var bar = document.createElement('div');
+  bar.className = 'msg-actions';
+  var cb = document.createElement('button');
+  cb.className = 'act-btn'; cb.textContent = '📋 复制';
+  cb.onclick = function(e){ e.stopPropagation(); copyMsg(idx, cb); };
+  var rb = document.createElement('button');
+  rb.className = 'act-btn'; rb.textContent = '🔄 重新回答';
+  rb.onclick = function(e){ e.stopPropagation(); regenMsg(idx); };
+  bar.appendChild(cb); bar.appendChild(rb);
+  div.appendChild(bar);
+}
+function msgText(idx){
+  var m = messages[idx];
+  if (!m) return '';
+  if (Array.isArray(m.content)) {
+    return m.content.map(function(p){ return p.type === 'text' ? String(p.text || '') : '[图片]'; }).join('\n');
+  }
+  return String(m.content || '');
+}
+function copyMsg(idx, btn){
+  var t = msgText(idx);
+  if (!t) return;
+  function done(){
+    if (btn) { var o = btn.textContent; btn.textContent = '✅ 已复制'; setTimeout(function(){ btn.textContent = o; }, 1500); }
+  }
+  function fallback(){
+    var ta = document.createElement('textarea');
+    ta.value = t; ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    try { document.execCommand('copy'); done(); } catch(e){}
+    document.body.removeChild(ta);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(done, fallback);
+  } else fallback();
+}
+function regenMsg(idx){
+  if (sending) return;
+  var ai = messages[idx];
+  if (!ai || ai.role !== 'assistant') return;
+  var user = messages[idx - 1];
+  if (!user || user.role !== 'user') return;
+  if (!confirm('重新生成这条回答？')) return;
+  messages.splice(idx, 1);
+  renderMessages();
+  saveHistory();
+  doSend();
 }
 function fmtTime(t){
   var d = new Date(t);
@@ -324,8 +379,6 @@ function stopGen(){
 async function send(){
   var text = $('input').value.trim();
   if (!text || sending) return;
-  var hint = document.querySelector('.hint');
-  if (hint) hint.remove();
   var imgData = pendingImage;
   pendingImage = null; $('imgPreview').style.display = 'none'; $('imgInput').value = '';
   var useVision = imgData && $('modelSel').value === 'deepseek-v4-flash';
@@ -342,7 +395,12 @@ async function send(){
   if (useVision) userHtml = '<img src="' + imgData + '" style="max-width:100%;border-radius:10px;margin-bottom:8px"><br>' + userHtml;
   addMsg('user', userHtml, msgTs);
   $('input').value = ''; $('input').style.height = 'auto';
-
+  doSend();
+}
+async function doSend(){
+  if (sending) return;
+  var hint = document.querySelector('.hint');
+  if (hint) hint.remove();
   sending = true;
   var btn = $('sendBtn'); btn.textContent = '■'; btn.classList.add('stop');
   var aiTs = Date.now();
@@ -415,10 +473,11 @@ async function send(){
     }
     aiDiv.classList.remove('cursor');
     messages.push({ role:'assistant', content: bodyText, t: Date.now() });
+    attachActions(aiDiv, messages.length - 1);
   } catch(e) {
     aiDiv.classList.remove('cursor');
     if (e.name === 'AbortError') {
-      if (bodyText) messages.push({ role:'assistant', content: bodyText, t: Date.now() });
+      if (bodyText) { messages.push({ role:'assistant', content: bodyText, t: Date.now() }); attachActions(aiDiv, messages.length - 1); }
       else aiDiv.remove();
     } else {
       aiDiv.remove();
@@ -634,7 +693,7 @@ function newConversation(){
 function renderMessages(){
   var chat=document.getElementById('chat'); chat.innerHTML='';
   if(!messages.length){ chat.innerHTML='<div class="hint">👋 你好，我是可乐站·DeepSeek<br>直接输入问题开始聊天，支持流式输出</div>'; return; }
-  messages.forEach(function(m){
+  messages.forEach(function(m, i){
     var html;
     if(Array.isArray(m.content)){
       html=m.content.map(function(p){
@@ -642,7 +701,7 @@ function renderMessages(){
         return md(String(p.text||''));
       }).join('');
     }else html=md(String(m.content||''));
-    addMsg(m.role==='assistant'?'ai':'user',html,m.t);
+    addMsg(m.role==='assistant'?'ai':'user',html,m.t, m.role==='assistant' ? i : null);
   });
 }
 async function loadHistory(){
