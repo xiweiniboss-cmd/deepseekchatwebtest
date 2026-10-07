@@ -674,7 +674,7 @@ async function handleAdminBlacklist(request, env){  if (!adminAuth(request, env)
   if (method === 'POST') {
     let body;
     try { body = await request.json(); } catch { return json({ ok: false, error: '格式错误' }, 400); }
-    const items = Array.isArray(body.items) ? body.items.slice(0,100) : [{ type: body.type, value: body.value, username: body.username }];
+    const items = Array.isArray(body.items) ? body.items.slice(0,100) : [{ type: body.type, value: body.value, username: body.username, reason: body.reason }];
     for (const it of items) {
       const type = it.type === 'device' ? 'device' : 'ip';
       const value = String(it.value || '').trim().slice(0,100);
