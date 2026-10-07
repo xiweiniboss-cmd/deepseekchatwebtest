@@ -53,7 +53,8 @@ async function handleAuth(request, env) {
   if (action === 'register') {
     const exists = await kv.get(ukey);
     if (exists) return json({ ok: false, error: '用户名已存在，请直接登录' }, 400);
-    await kv.put(ukey, JSON.stringify({ ph: passHash, t: Date.now() }));
+    const regIp = request.headers.get('cf-connecting-ip') || '';
+    await kv.put(ukey, JSON.stringify({ ph: passHash, t: Date.now(), ip: regIp }));
   } else {
     const raw = await kv.get(ukey);
     if (!raw) return json({ ok: false, error: '用户不存在，请先注册' }, 400);
@@ -206,7 +207,7 @@ function adminPage(env){
   + 'function esc(t){return String(t||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}'
   + 'function api(p){return fetch(p+(p.indexOf("?")>=0?"&":"?")+"key="+encodeURIComponent(K)).then(function(r){return r.text();}).then(function(t){try{return JSON.parse(t);}catch(e){return{ok:false,error:"返回异常:"+t.slice(0,80)};}}).catch(function(e){return{ok:false,error:"网络错误"};});}'
   + 'async function doLogin(){lm("验证中…","#9a9aa3");K=document.getElementById("ki").value.trim();if(!K){lm("请输入密码");return;}var j=await api("/api/admin/users");if(!j.ok){lm(j.error||"密码错误");return;}document.getElementById("kb").className="hd";document.getElementById("mn").className="";showUsers(j.users);}'
-  + 'function showUsers(us){var h=\'\';if(!us.length)h=\'<div class="card">暂无用户</div>\';for(var i=0;i<us.length;i++){var u=us[i];h+=\'<div class="card"><div class="row"><div><b>\'+esc(u.username)+\'</b> \'+u.convs+\'个对话</div><div><button class="bv" data-u="\'+esc(u.username)+\'" data-a="v">查看</button> <button class="bd" data-u="\'+esc(u.username)+\'" data-a="d">删除</button></div></div></div>\';}document.getElementById(\'ul\').innerHTML=h;bindBtns(\'ul\');}'
+  + 'function showUsers(us){var h=\'\';if(!us.length)h=\'<div class="card">暂无用户</div>\';for(var i=0;i<us.length;i++){var u=us[i];h+=\'<div class="card"><div class="row"><div><b>\'+esc(u.username)+\'</b> \'+u.convs+\'个对话<br><span style="color:#9a9aa3;font-size:12px">\'+esc(u.model||\'--\')+\' | \'+esc(u.ip||\'--\')+\'</span></div><div><button class="bv" data-u="\'+esc(u.username)+\'" data-a="v">查看</button> <button class="bd" data-u="\'+esc(u.username)+\'" data-a="d">删除</button></div></div></div>\';}document.getElementById(\'ul\').innerHTML=h;bindBtns(\'ul\');}'
   + 'function bindBtns(id){var el=document.getElementById(id);var bs=el.querySelectorAll("button[data-u]");for(var i=0;i<bs.length;i++){bs[i].onclick=function(){var u=this.getAttribute("data-u");var a=this.getAttribute("data-a");if(a==="v")viewConvs(u);else delUser(u);};}}'
   + 'async function viewConvs(u){var j=await api(\'/api/admin/user-convs?user=\'+encodeURIComponent(u));if(!j.ok){alert(\'失败\');return;}document.getElementById(\'ml\').innerHTML=\'\';var t=document.getElementById(\'ct\');t.className=\'\';t.textContent=u+\' 的对话\';var h=\'\';if(!j.convs.length)h=\'<div class="card">无对话</div>\';for(var i=0;i<j.convs.length;i++){var c=j.convs[i];var d=new Date(c.t);var ds=(d.getMonth()+1)+\'-\'+d.getDate()+\' \'+d.getHours()+\':\'+(\'0\'+d.getMinutes()).slice(-2);h+=\'<div class="card"><div class="row"><div><b>\'+esc(c.title)+\'</b><br><span style="color:#9a9aa3;font-size:12px">\'+ds+\'</span></div><button class="bv" data-u="\'+esc(u)+\'" data-c="\'+c.id+\'">查看内容</button></div></div>\';}var cl=document.getElementById(\'cl\');cl.innerHTML=h;var bs=cl.querySelectorAll(\'button[data-c]\');for(var k=0;k<bs.length;k++){bs[k].onclick=function(){viewMsgs(this.getAttribute(\'data-u\'),this.getAttribute(\'data-c\'));};}t.scrollIntoView();}'
   + 'async function viewMsgs(u,id){var j=await api(\'/api/admin/conv?user=\'+encodeURIComponent(u)+\'&id=\'+encodeURIComponent(id));if(!j.ok){alert(\'失败\');return;}var t=document.getElementById(\'mt\');t.className=\'\';t.textContent=\'对话内容\';var h=\'\';for(var i=0;i<j.messages.length;i++){var m=j.messages[i];var txt=Array.isArray(m.content)?m.content.map(function(p){return p.type===\'text\'?p.text:\'[图片]\';}).join(\'\'):String(m.content||\'\');h+=\'<div class="msg \'+m.role+\'"><div class="rl">\'+(m.role===\'user\'?\'用户\':\'AI\')+\'</div>\'+esc(txt).replace(/\\n/g,\'<br>\')+\'</div>\';}document.getElementById(\'ml\').innerHTML=h||\'<div class="card">空</div>\';t.scrollIntoView();}'
@@ -238,7 +239,10 @@ async function handleAdminUsers(request, env){
           const raw = await kv.get('convs_' + uname);
           if (raw) { const l = JSON.parse(raw); if (Array.isArray(l)) convCount = l.length; }
         } catch(e){}
-        out.push({ username: uname, convs: convCount });
+        let regIp2='', lm='';
+        try { const ur=await kv.get(k.name); if(ur) regIp2=JSON.parse(ur).ip||''; } catch(e){}
+        try { lm=await kv.get('umodel_'+uname)||''; } catch(e){}
+        out.push({ username: uname, convs: convCount, ip: regIp2, model: lm });
       }
       cursor = res.list_complete ? undefined : res.cursor;
     } while (cursor);
@@ -328,6 +332,7 @@ async function handleChat(request, env) {
   const apiKey = (env.DEEPSEEK_API_KEY || '').trim();
   if (!apiKey) return json({ ok: false, error: '未配置 DeepSeek API Key：请在 Cloudflare Pages → Settings → Environment variables 添加 DEEPSEEK_API_KEY（重新部署后生效）' }, 500);
   const model = body.model === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
+  try { if (kv) await kv.put('umodel_' + username, model, { expirationTtl: 90*24*3600 }); } catch(e){}
   const messages = Array.isArray(body.messages) ? body.messages.slice(-30) : [];
   if (!messages.length || !messages.some(function(m){ return m.role === 'user'; }))
     return json({ ok: false, error: '消息为空' }, 400);
