@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>DeepSeek 聊天</title>
+<title>可乐站·DeepSeek</title>
 <style>
 :root{ --acc:#4D6BFE; --bg:#0f0f13; --card:#1a1a21; --text:#f1f1f3; --muted:#9a9aa3; --user:#2a2a34; }
 *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
@@ -102,7 +102,7 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 <body>
 <header>
   <span class="dot"></span>
-  <h1>DeepSeek</h1>
+  <h1>可乐站·DeepSeek</h1>
   <select id="modelSel">
     <option value="deepseek-v4-flash">V4 Flash（可看图）</option>
     <option value="deepseek-v4-pro">V4 Pro（更强）</option>
@@ -112,7 +112,7 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
   <span id="userBadge" title="点击退出">👤</span>
 </header>
 <div id="chat">
-  <div class="hint">👋 你好，我是 DeepSeek<br>直接输入问题开始聊天，支持流式输出</div>
+  <div class="hint">👋 你好，我是可乐站·DeepSeek<br>直接输入问题开始聊天，支持流式输出</div>
 </div>
 <div id="chatTsWrap"><div id="chatTs"></div></div>
 <div id="inputBar">
@@ -129,7 +129,7 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 </div>
 <div id="loginWrap">
   <div id="loginBox">
-    <h2>🔐 登录</h2>
+    <h2>可乐站·DeepSeek</h2><p style="font-size:13px;color:var(--muted);margin:6px 0 18px">🔐 登录</p>
     <p>用户名：1-8个字母<br>密码：1-10位数字<br>聊天记录云端保存，换设备不丢</p>
     <input id="loginUser" maxlength="8" placeholder="用户名" autocomplete="off" autocapitalize="off">
     <input id="loginPass" type="password" maxlength="10" inputmode="numeric" placeholder="密码">
@@ -547,7 +547,7 @@ function newConversation(){
 }
 function renderMessages(){
   var chat=document.getElementById('chat'); chat.innerHTML='';
-  if(!messages.length){ chat.innerHTML='<div class="hint">👋 你好，我是 DeepSeek<br>直接输入问题开始聊天，支持流式输出</div>'; return; }
+  if(!messages.length){ chat.innerHTML='<div class="hint">👋 你好，我是可乐站·DeepSeek<br>直接输入问题开始聊天，支持流式输出</div>'; return; }
   messages.forEach(function(m){
     var html;
     if(Array.isArray(m.content)){
