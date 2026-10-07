@@ -18,8 +18,104 @@ async function verifyTurnstile(token, secret, ip) {
   } catch { return false; }
 }
 
+// ---------- 简易登录（用户名1-8字母 + 密码1-10数字，防聊天记录丢失） ----------
+async function sha256(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+}
+function validUsername(u){ return /^[a-zA-Z]{1,8}$/.test(u); }
+function validPassword(p){ return /^[0-9]{1,10}$/.test(p); }
+function randToken(){
+  const a = new Uint8Array(24);
+  crypto.getRandomValues(a);
+  return Array.from(a).map(function(b){ return b.toString(36); }).join('').replace(/[^a-z0-9]/gi,'').slice(0,32);
+}
+async function getUserByToken(request, env) {
+  const auth = request.headers.get('Authorization') || '';
+  const m = auth.match(/^Bearer\s+(\S+)$/);
+  const token = m ? m[1] : new URL(request.url).searchParams.get('token');
+  if (!token || !env.FEEDBACK_KV) return null;
+  const username = await env.FEEDBACK_KV.get('sess_' + token);
+  return username || null;
+}
+async function handleAuth(request, env) {
+  const kv = env.FEEDBACK_KV;
+  if (!kv) return json({ ok: false, error: '暂未启用' }, 503);
+  let body;
+  try { body = await request.json(); } catch { return json({ ok: false, error: '请求格式错误' }, 400); }
+  const action = body.action === 'register' ? 'register' : 'login';
+  const username = String(body.username || '').trim();
+  const password = String(body.password || '').trim();
+  if (!validUsername(username)) return json({ ok: false, error: '用户名为1-8个字母' }, 400);
+  if (!validPassword(password)) return json({ ok: false, error: '密码为1-10位数字' }, 400);
+  const ukey = 'user_' + username.toLowerCase();
+  const passHash = await sha256('ds:' + username.toLowerCase() + ':' + password);
+  if (action === 'register') {
+    const exists = await kv.get(ukey);
+    if (exists) return json({ ok: false, error: '用户名已存在，请直接登录' }, 400);
+    await kv.put(ukey, JSON.stringify({ ph: passHash, t: Date.now() }));
+  } else {
+    const raw = await kv.get(ukey);
+    if (!raw) return json({ ok: false, error: '用户不存在，请先注册' }, 400);
+    try {
+      const u = JSON.parse(raw);
+      if (u.ph !== passHash) return json({ ok: false, error: '密码错误' }, 401);
+    } catch { return json({ ok: false, error: '账户异常' }, 500); }
+  }
+  const token = randToken();
+  await kv.put('sess_' + token, username.toLowerCase(), { expirationTtl: 30*24*3600 });
+  return json({ ok: true, token, username });
+}
+async function handleHistoryGet(request, env) {
+  const username = await getUserByToken(request, env);
+  if (!username) return json({ ok: false, error: '未登录' }, 401);
+  const kv = env.FEEDBACK_KV;
+  let messages = [];
+  try {
+    const raw = await kv.get('hist_' + username);
+    if (raw) messages = JSON.parse(raw);
+  } catch {}
+  // 图片消息太占地方，只返回最近30条，且图片转占位
+  if (!Array.isArray(messages)) messages = [];
+  messages = messages.slice(-30).map(function(m){
+    if (Array.isArray(m.content)) {
+      return { role: m.role, content: m.content.map(function(p){
+        if (p.type === 'image_url') return { type: 'image_url', image_url: { url: '[图片]' } };
+        return p;
+      })};
+    }
+    return m;
+  });
+  return json({ ok: true, messages });
+}
+async function handleHistorySave(request, env) {
+  const username = await getUserByToken(request, env);
+  if (!username) return json({ ok: false, error: '未登录' }, 401);
+  let body;
+  try { body = await request.json(); } catch { return json({ ok: false, error: '格式错误' }, 400); }
+  let messages = Array.isArray(body.messages) ? body.messages.slice(-50) : [];
+  // 清洗：图片 dataURL 太大，存占位符（历史里不保留原图）
+  messages = messages.map(function(m){
+    const role = m.role === 'assistant' ? 'assistant' : 'user';
+    if (Array.isArray(m.content)) {
+      const parts = m.content.map(function(p){
+        if (p && p.type === 'image_url') return { type: 'text', text: '[图片]' };
+        if (p && p.type === 'text') return { type: 'text', text: String(p.text||'').slice(0,5000) };
+        return null;
+      }).filter(Boolean);
+      return { role, content: parts.length ? parts : [{type:'text',text:'(空)'}] };
+    }
+    return { role, content: String(m.content||'').slice(0, 8000) };
+  });
+  await env.FEEDBACK_KV.put('hist_' + username, JSON.stringify(messages));
+  return json({ ok: true });
+}
+
 // ---------- DeepSeek 聊天代理 ----------
+
 async function handleChat(request, env) {
+  const username = await getUserByToken(request, env);
+  if (!username) return json({ ok: false, error: '请先登录' }, 401);
   const apiKey = (env.DEEPSEEK_API_KEY || '').trim();
   if (!apiKey) return json({ ok: false, error: '未配置 DeepSeek API Key：请在 Cloudflare Pages → Settings → Environment variables 添加 DEEPSEEK_API_KEY（重新部署后生效）' }, 500);
 
@@ -198,6 +294,9 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === '/api/chat' && request.method === 'POST') return handleChat(request, env);
+    if (url.pathname === '/api/auth' && request.method === 'POST') return handleAuth(request, env);
+    if (url.pathname === '/api/history' && request.method === 'GET') return handleHistoryGet(request, env);
+    if (url.pathname === '/api/history' && request.method === 'POST') return handleHistorySave(request, env);
     if (url.pathname === '/api/turnstile-key') {
       return json({ ok: true, siteKey: (env.TURNSTILE_SITE_KEY || '').trim() });
     }

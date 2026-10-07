@@ -54,6 +54,19 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 #fbWrap .btn-send{ flex:1; background:var(--acc); border:none; border-radius:12px; font-size:15px; padding:13px 0; color:#fff; cursor:pointer; font-weight:600; }
 #fbErr{ display:none; color:#ff8ba0; font-size:13px; margin-top:10px; }
 #fbToast{ display:none; position:fixed; left:50%; bottom:100px; transform:translateX(-50%); background:rgba(0,0,0,.85); color:#fff; font-size:13px; padding:10px 18px; border-radius:20px; z-index:99; }
+#loginWrap{ position:fixed; inset:0; z-index:100; background:var(--bg); display:flex; align-items:center; justify-content:center; padding:20px; }
+#loginWrap.hide{ display:none; }
+#loginBox{ background:var(--card); border:1px solid #2c2c36; border-radius:18px; padding:28px 24px; width:100%; max-width:340px; text-align:center; }
+#loginBox h2{ margin:0 0 6px; font-size:20px; }
+#loginBox p{ color:var(--muted); font-size:13px; margin:0 0 18px; line-height:1.7; }
+#loginBox input{ width:100%; background:#101016; border:1px solid #2c2c36; border-radius:12px; color:var(--text); font-size:15px; padding:13px; outline:none; margin-bottom:12px; text-align:center; letter-spacing:1px; }
+#loginBox input:focus{ border-color:var(--acc); }
+#loginBox .lrow{ display:flex; gap:10px; margin-top:6px; }
+#loginBox .lbtn{ flex:1; border:none; border-radius:12px; font-size:15px; padding:13px 0; cursor:pointer; font-weight:600; }
+#loginBox .l-login{ background:var(--acc); color:#fff; }
+#loginBox .l-reg{ background:#2a2a34; color:var(--text); }
+#loginErr{ display:none; color:#ff8ba0; font-size:13px; margin-top:10px; }
+#userBadge{ font-size:12px; color:var(--muted); background:#1a1a21; border:1px solid #2c2c36; padding:6px 10px; border-radius:20px; cursor:pointer; }
 </style>
 </head>
 <body>
@@ -65,6 +78,7 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
     <option value="deepseek-v4-pro">V4 Pro（更强）</option>
   </select>
   <button id="newBtn">新对话</button>
+  <span id="userBadge" title="点击退出">👤</span>
 </header>
 <div id="chat">
   <div class="hint">👋 你好，我是 DeepSeek<br>直接输入问题开始聊天，支持流式输出</div>
@@ -114,6 +128,7 @@ $('newBtn').onclick = function(){
   if (sending) stopGen();
   messages = [];
   $('chat').innerHTML = '<div class="hint">👋 新对话开始<br>直接输入问题开始聊天</div>';
+  saveHistory();
 };
 $('input').addEventListener('input', function(){
   this.style.height = 'auto';
@@ -190,12 +205,13 @@ async function send(){
   try {
     var resp = await fetch('/api/chat', {
       method:'POST',
-      headers:{ 'Content-Type':'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ model: $('modelSel').value, messages: messages }),
       signal: aborter.signal,
     });
     if (!resp.ok) {
       var ej = await resp.json().catch(function(){ return {}; });
+      if (resp.status === 401) { showLogin(); throw new Error('请先登录'); }
       throw new Error(ej.error || ('请求失败(' + resp.status + ')'));
     }
     var reader = resp.body.getReader();
@@ -246,6 +262,7 @@ async function send(){
   sending = false;
   btn.textContent = '➤'; btn.classList.remove('stop');
   aborter = null;
+  saveHistory();
 }
 
 // ---------- 反馈 ----------
@@ -297,6 +314,83 @@ $('fbSend').onclick = async function(){
   try { turnstile.reset(fbTsId); } catch(e){}
   btn.disabled = false; btn.textContent = '提交反馈';
 };
+
+// ---------- 登录 + 云端历史 ----------
+var authToken = null, authUser = null;
+try { authToken = localStorage.getItem('ds_token'); authUser = localStorage.getItem('ds_user'); } catch(e){}
+function authHeaders(){ return { 'Content-Type':'application/json', 'Authorization':'Bearer ' + authToken }; }
+function showLogin() { $('loginWrap').classList.remove('hide'); }
+function hideLogin() { $('loginWrap').classList.add('hide'); }
+function loginErr(m){ var e=$('loginErr'); e.textContent=m; e.style.display='block'; }
+async function doAuth(action){
+  var u = $('loginUser').value.trim(), p = $('loginPass').value.trim();
+  $('loginErr').style.display='none';
+  if (!/^[a-zA-Z]{1,8}$/.test(u)) { loginErr('用户名为1-8个字母'); return; }
+  if (!/^[0-9]{1,10}$/.test(p)) { loginErr('密码为1-10位数字'); return; }
+  try {
+    var r = await fetch('/api/auth', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ action: action, username: u, password: p }) });
+    var j = await r.json();
+    if (!j.ok) { loginErr(j.error || '失败'); return; }
+    authToken = j.token; authUser = j.username;
+    try { localStorage.setItem('ds_token', authToken); localStorage.setItem('ds_user', authUser); } catch(e){}
+    hideLogin();
+    $('userBadge').textContent = '👤 ' + authUser;
+    await loadHistory();
+  } catch(e){ loginErr('网络错误'); }
+}
+$('loginBtn').onclick = function(){ doAuth('login'); };
+$('regBtn').onclick = function(){ doAuth('register'); };
+$('loginPass').addEventListener('keydown', function(e){ if(e.key==='Enter') doAuth('login'); });
+$('userBadge').onclick = function(){
+  if (!confirm('退出登录？（聊天记录保留在云端）')) return;
+  authToken = null; authUser = null;
+  try { localStorage.removeItem('ds_token'); localStorage.removeItem('ds_user'); } catch(e){}
+  messages = []; $('chat').innerHTML = '';
+  $('userBadge').textContent = '👤';
+  showLogin();
+};
+var saveTimer = null;
+function saveHistory(){
+  if (!authToken) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(function(){
+    fetch('/api/history', { method:'POST', headers: authHeaders(),
+      body: JSON.stringify({ messages: messages }) }).catch(function(){});
+  }, 1500);
+}
+async function loadHistory(){
+  if (!authToken) return;
+  try {
+    var r = await fetch('/api/history', { headers: authHeaders() });
+    var j = await r.json();
+    if (!j.ok) { if (r.status === 401) { showLogin(); } return; }
+    messages = Array.isArray(j.messages) ? j.messages : [];
+    $('chat').innerHTML = '';
+    if (!messages.length) {
+      $('chat').innerHTML = '<div class="hint">👋 你好，我是 DeepSeek<br>直接输入问题开始聊天，支持流式输出</div>';
+      return;
+    }
+    messages.forEach(function(m){
+      var html;
+      if (Array.isArray(m.content)) {
+        html = m.content.map(function(p){
+          if (p.type === 'image_url') return '<div style="color:#9a9aa3;font-size:13px">[图片]</div>';
+          return md(String(p.text||''));
+        }).join('');
+      } else html = md(String(m.content||''));
+      addMsg(m.role === 'assistant' ? 'ai' : 'user', html);
+    });
+  } catch(e){}
+}
+// 页面加载时检查登录
+if (authToken && authUser) {
+  hideLogin();
+  $('userBadge').textContent = '👤 ' + authUser;
+  loadHistory();
+} else {
+  showLogin();
+}
 </script>
 <button id="fbBtn">💬</button>
 <div id="fbWrap">
@@ -316,5 +410,18 @@ $('fbSend').onclick = async function(){
   </div>
 </div>
 <div id="fbToast"></div>
+<div id="loginWrap">
+  <div id="loginBox">
+    <h2>🔐 登录</h2>
+    <p>用户名：1-8个字母<br>密码：1-10位数字<br>聊天记录云端保存，换设备不丢</p>
+    <input id="loginUser" maxlength="8" placeholder="用户名" autocomplete="off" autocapitalize="off">
+    <input id="loginPass" type="password" maxlength="10" inputmode="numeric" placeholder="密码">
+    <div class="lrow">
+      <button class="lbtn l-reg" id="regBtn">注册</button>
+      <button class="lbtn l-login" id="loginBtn">登录</button>
+    </div>
+    <div id="loginErr"></div>
+  </div>
+</div>
 </body>
 </html>
