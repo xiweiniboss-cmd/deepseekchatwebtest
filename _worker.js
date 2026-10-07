@@ -66,36 +66,11 @@ async function handleAuth(request, env) {
   await kv.put('sess_' + token, username.toLowerCase(), { expirationTtl: 30*24*3600 });
   return json({ ok: true, token, username });
 }
-async function handleHistoryGet(request, env) {
-  const username = await getUserByToken(request, env);
-  if (!username) return json({ ok: false, error: '未登录' }, 401);
-  const kv = env.FEEDBACK_KV;
-  let messages = [];
-  try {
-    const raw = await kv.get('hist_' + username);
-    if (raw) messages = JSON.parse(raw);
-  } catch {}
-  // 图片消息太占地方，只返回最近30条，且图片转占位
-  if (!Array.isArray(messages)) messages = [];
-  messages = messages.slice(-30).map(function(m){
-    if (Array.isArray(m.content)) {
-      return { role: m.role, content: m.content.map(function(p){
-        if (p.type === 'image_url') return { type: 'image_url', image_url: { url: '[图片]' } };
-        return p;
-      })};
-    }
-    return m;
-  });
-  return json({ ok: true, messages });
-}
-async function handleHistorySave(request, env) {
-  const username = await getUserByToken(request, env);
-  if (!username) return json({ ok: false, error: '未登录' }, 401);
-  let body;
-  try { body = await request.json(); } catch { return json({ ok: false, error: '格式错误' }, 400); }
-  let messages = Array.isArray(body.messages) ? body.messages.slice(-50) : [];
-  // 清洗：图片 dataURL 太大，存占位符（历史里不保留原图）
-  messages = messages.map(function(m){
+// ---------- 多会话历史 ----------
+function convId(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+function cleanMessages(messages){
+  messages = Array.isArray(messages) ? messages.slice(-60) : [];
+  return messages.map(function(m){
     const role = m.role === 'assistant' ? 'assistant' : 'user';
     if (Array.isArray(m.content)) {
       const parts = m.content.map(function(p){
@@ -107,10 +82,255 @@ async function handleHistorySave(request, env) {
     }
     return { role, content: String(m.content||'').slice(0, 8000) };
   });
-  await env.FEEDBACK_KV.put('hist_' + username, JSON.stringify(messages));
+}
+// 兼容旧版单会话：迁移到新格式
+async function migrateOldHist(kv, username){
+  try {
+    const old = await kv.get('hist_' + username);
+    if (!old) return;
+    const msgs = JSON.parse(old);
+    if (!Array.isArray(msgs) || !msgs.length) { await kv.delete('hist_' + username); return; }
+    const id = convId();
+    const firstUser = msgs.find(function(m){ return m.role === 'user'; });
+    let title = '旧对话';
+    if (firstUser) {
+      const t = Array.isArray(firstUser.content) ? (firstUser.content.find(function(p){return p.type==='text';})||{}).text : firstUser.content;
+      title = String(t||'旧对话').slice(0,20) || '旧对话';
+    }
+    await kv.put('conv_' + username + '_' + id, JSON.stringify(cleanMessages(msgs)));
+    await kv.put('convs_' + username, JSON.stringify([{ id, title, t: Date.now() }]));
+    await kv.delete('hist_' + username);
+  } catch(e){}
+}
+async function handleConvsList(request, env){
+  const username = await getUserByToken(request, env);
+  if (!username) return json({ ok: false, error: '未登录' }, 401);
+  const kv = env.FEEDBACK_KV;
+  await migrateOldHist(kv, username);
+  let list = [];
+  try { const raw = await kv.get('convs_' + username); if (raw) list = JSON.parse(raw); } catch(e){}
+  if (!Array.isArray(list)) list = [];
+  list.sort(function(a,b){ return (b.t||0)-(a.t||0); });
+  return json({ ok: true, convs: list.slice(0,50) });
+}
+async function handleConvGet(request, env){
+  const username = await getUserByToken(request, env);
+  if (!username) return json({ ok: false, error: '未登录' }, 401);
+  const id = new URL(request.url).searchParams.get('id') || '';
+  if (!/^[a-z0-9]{5,20}$/.test(id)) return json({ ok: false, error: '参数错误' }, 400);
+  let messages = [];
+  try { const raw = await env.FEEDBACK_KV.get('conv_' + username + '_' + id); if (raw) messages = JSON.parse(raw); } catch(e){}
+  return json({ ok: true, messages: Array.isArray(messages) ? messages : [] });
+}
+async function handleConvSave(request, env){
+  const username = await getUserByToken(request, env);
+  if (!username) return json({ ok: false, error: '未登录' }, 401);
+  let body;
+  try { body = await request.json(); } catch { return json({ ok: false, error: '格式错误' }, 400); }
+  const kv = env.FEEDBACK_KV;
+  let id = String(body.id || '');
+  if (!/^[a-z0-9]{5,20}$/.test(id)) id = convId();
+  const messages = cleanMessages(body.messages);
+  if (!messages.length) return json({ ok: true, id });
+  let title = String(body.title || '').slice(0,30);
+  if (!title) {
+    const firstUser = messages.find(function(m){ return m.role === 'user'; });
+    if (firstUser) {
+      const t = Array.isArray(firstUser.content) ? (firstUser.content.find(function(p){return p.type==='text';})||{}).text : firstUser.content;
+      title = String(t||'新对话').replace(/\n/g,' ').slice(0,20) || '新对话';
+    } else title = '新对话';
+  }
+  await kv.put('conv_' + username + '_' + id, JSON.stringify(messages));
+  let list = [];
+  try { const raw = await kv.get('convs_' + username); if (raw) list = JSON.parse(raw); } catch(e){}
+  if (!Array.isArray(list)) list = [];
+  list = list.filter(function(c){ return c.id !== id; });
+  list.unshift({ id, title, t: Date.now() });
+  list = list.slice(0,50);
+  // 删除超出的旧会话
+  if (list.length >= 50) {
+    try {
+      const keep = new Set(list.map(function(c){ return c.id; }));
+      const all = await kv.list({ prefix: 'conv_' + username + '_' });
+      for (const k of all.keys) {
+        const cid = k.name.slice(('conv_' + username + '_').length);
+        if (!keep.has(cid)) await kv.delete(k.name);
+      }
+    } catch(e){}
+  }
+  await kv.put('convs_' + username, JSON.stringify(list));
+  return json({ ok: true, id, title });
+}
+async function handleConvDelete(request, env){
+  const username = await getUserByToken(request, env);
+  if (!username) return json({ ok: false, error: '未登录' }, 401);
+  const id = new URL(request.url).searchParams.get('id') || '';
+  if (!/^[a-z0-9]{5,20}$/.test(id)) return json({ ok: false, error: '参数错误' }, 400);
+  const kv = env.FEEDBACK_KV;
+  await kv.delete('conv_' + username + '_' + id);
+  let list = [];
+  try { const raw = await kv.get('convs_' + username); if (raw) list = JSON.parse(raw); } catch(e){}
+  if (Array.isArray(list)) {
+    list = list.filter(function(c){ return c.id !== id; });
+    await kv.put('convs_' + username, JSON.stringify(list));
+  }
   return json({ ok: true });
 }
 
+// ---------- 后台管理 ----------
+function adminPage(env){
+  const html = `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>DeepSeek站 后台</title>
+<style>*{box-sizing:border-box}body{margin:0;background:#0b0b0f;color:#e8e8ec;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;padding:16px;max-width:720px;margin:0 auto}
+h1{font-size:20px}h2{font-size:16px;margin-top:24px;color:#9a9aa3}
+.card{background:#14141a;border:1px solid #2c2c36;border-radius:14px;padding:14px;margin-bottom:10px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px}
+button{border:none;border-radius:10px;padding:9px 14px;font-size:14px;cursor:pointer}
+.btn-view{background:#2a2a34;color:#e8e8ec}.btn-del{background:#3a2028;color:#ff8ba0}.btn-back{background:#2a2a34;color:#e8e8ec;margin-bottom:12px}
+.msg{border-left:3px solid #2c2c36;padding:8px 10px;margin:8px 0;font-size:14px;line-height:1.7;white-space:pre-wrap;word-break:break-word}
+.msg.user{border-color:#4a9eff}.msg.assistant{border-color:#22c55e}
+.msg .role{font-size:12px;color:#9a9aa3;margin-bottom:4px}
+#keyBox{text-align:center;margin-top:60px}.hide{display:none}
+input{background:#101016;border:1px solid #2c2c36;border-radius:10px;color:#e8e8ec;padding:12px;font-size:15px;width:220px;text-align:center}
+</style></head><body>
+<div id="keyBox"><h1>🔐 后台管理</h1><p style="color:#9a9aa3">请输入管理密码</p><input type="password" id="keyInput"><br><br><button class="btn-view" onclick="login()">进入</button></div>
+<div id="main" class="hide">
+<h1>👥 用户管理 <span style="font-size:12px;color:#9a9aa3">[DeepSeek站]</span></h1>
+<button class="btn-back" onclick="loadUsers()">🔄 刷新</button>
+<div id="userList"></div>
+<h2 id="convTitle" class="hide"></h2><div id="convList"></div>
+<h2 id="msgTitle" class="hide"></h2><div id="msgList"></div>
+</div>
+<script>
+var K='';
+function api(p){ return fetch(p+(p.includes('?')?'&':'?')+'key='+encodeURIComponent(K)).then(function(r){return r.json();}); }
+function login(){ K=document.getElementById('keyInput').value.trim(); if(!K) return; loadUsers(); }
+function esc(t){ return String(t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+async function loadUsers(){
+  var j=await api('/api/admin/users');
+  if(!j.ok){ alert(j.error||'密码错误'); return; }
+  document.getElementById('keyBox').classList.add('hide');
+  document.getElementById('main').classList.remove('hide');
+  document.getElementById('convList').innerHTML=''; document.getElementById('msgList').innerHTML='';
+  var h=j.users.length? '' : '<div class="card">暂无用户</div>';
+  j.users.forEach(function(u){
+    h+='<div class="card"><div class="row"><div><b>'+esc(u.username)+'</b> <span style="color:#9a9aa3;font-size:13px">'+u.convs+' 个对话</span></div><div><button class="btn-view" onclick="viewConvs(\''+esc(u.username)+'\')">查看</button> <button class="btn-del" onclick="delUser(\''+esc(u.username)+'\')">删除</button></div></div></div>';
+  });
+  document.getElementById('userList').innerHTML=h;
+}
+async function viewConvs(u){
+  var j=await api('/api/admin/user-convs?user='+encodeURIComponent(u));
+  if(!j.ok){ alert('失败'); return; }
+  document.getElementById('msgList').innerHTML='';
+  var t=document.getElementById('convTitle'); t.classList.remove('hide'); t.textContent='📝 '+u+' 的对话';
+  var h=j.convs.length?'':'<div class="card">无对话</div>';
+  j.convs.forEach(function(c){
+    var d=new Date(c.t); var ds=(d.getMonth()+1)+'-'+d.getDate()+' '+d.getHours()+':'+String(d.getMinutes()).padStart(2,'0');
+    h+='<div class="card"><div class="row"><div><b>'+esc(c.title)+'</b><br><span style="color:#9a9aa3;font-size:12px">'+ds+'</span></div><button class="btn-view" onclick="viewMsgs(\''+esc(u)+'\',\''+c.id+'\',\''+esc(c.title).replace(/'/g,"\\'")+'\')">查看内容</button></div></div>';
+  });
+  document.getElementById('convList').innerHTML=h;
+  document.getElementById('convTitle').scrollIntoView();
+}
+async function viewMsgs(u,id,title){
+  var j=await api('/api/admin/conv?user='+encodeURIComponent(u)+'&id='+encodeURIComponent(id));
+  if(!j.ok){ alert('失败'); return; }
+  var t=document.getElementById('msgTitle'); t.classList.remove('hide'); t.textContent='💬 '+title;
+  var h='';
+  j.messages.forEach(function(m){
+    var txt = Array.isArray(m.content) ? m.content.map(function(p){ return p.type==='text'?p.text:'[图片]'; }).join('') : String(m.content||'');
+    h+='<div class="msg '+m.role+'"><div class="role">'+(m.role==='user'?'用户':'AI')+'</div>'+esc(txt).replace(/\n/g,'<br>')+'</div>';
+  });
+  document.getElementById('msgList').innerHTML=h||'<div class="card">空</div>';
+  document.getElementById('msgTitle').scrollIntoView();
+}
+async function delUser(u){
+  if(!confirm('确定删除用户 '+u+' 及其所有聊天记录？不可恢复！')) return;
+  var r=await fetch('/api/admin/delete-user?key='+encodeURIComponent(K),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:u})});
+  var j=await r.json();
+  if(j.ok){ alert('已删除'); loadUsers(); } else alert(j.error||'失败');
+}
+document.getElementById('keyInput').addEventListener('keydown',function(e){ if(e.key==='Enter') login(); });
+</script></body></html>`;
+  return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+}
+function adminAuth(request, env){
+  const key = (env.FEEDBACK_ADMIN_KEY || '').trim();
+  if (!key) return false;
+  const url = new URL(request.url);
+  return url.searchParams.get('key') === key;
+}
+async function handleAdminUsers(request, env){
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const kv = env.FEEDBACK_KV;
+  const out = [];
+  try {
+    let cursor = undefined;
+    do {
+      const res = await kv.list({ prefix: 'user_', cursor });
+      for (const k of res.keys) {
+        const uname = k.name.slice(5);
+        let convCount = 0;
+        try {
+          const raw = await kv.get('convs_' + uname);
+          if (raw) { const l = JSON.parse(raw); if (Array.isArray(l)) convCount = l.length; }
+        } catch(e){}
+        out.push({ username: uname, convs: convCount });
+      }
+      cursor = res.list_complete ? undefined : res.cursor;
+    } while (cursor);
+  } catch(e){}
+  out.sort(function(a,b){ return b.convs - a.convs; });
+  return json({ ok: true, users: out });
+}
+async function handleAdminUserConvs(request, env){
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const uname = (new URL(request.url).searchParams.get('user') || '').toLowerCase();
+  if (!/^[a-z]{1,8}$/.test(uname)) return json({ ok: false, error: '参数错误' }, 400);
+  let list = [];
+  try { const raw = await env.FEEDBACK_KV.get('convs_' + uname); if (raw) list = JSON.parse(raw); } catch(e){}
+  if (!Array.isArray(list)) list = [];
+  return json({ ok: true, convs: list });
+}
+async function handleAdminConvView(request, env){
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const url = new URL(request.url);
+  const uname = (url.searchParams.get('user') || '').toLowerCase();
+  const id = url.searchParams.get('id') || '';
+  if (!/^[a-z]{1,8}$/.test(uname) || !/^[a-z0-9]{5,20}$/.test(id)) return json({ ok: false, error: '参数错误' }, 400);
+  let messages = [];
+  try { const raw = await env.FEEDBACK_KV.get('conv_' + uname + '_' + id); if (raw) messages = JSON.parse(raw); } catch(e){}
+  return json({ ok: true, messages: Array.isArray(messages) ? messages : [] });
+}
+async function handleAdminDeleteUser(request, env){
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  let body;
+  try { body = await request.json(); } catch { return json({ ok: false, error: '格式错误' }, 400); }
+  const uname = String(body.user || '').toLowerCase();
+  if (!/^[a-z]{1,8}$/.test(uname)) return json({ ok: false, error: '参数错误' }, 400);
+  const kv = env.FEEDBACK_KV;
+  const prefixes = ['user_' + uname, 'convs_' + uname, 'conv_' + uname + '_'];
+  try {
+    for (const p of prefixes) {
+      let cursor = undefined;
+      do {
+        const res = await kv.list({ prefix: p, cursor });
+        for (const k of res.keys) await kv.delete(k.name);
+        cursor = res.list_complete ? undefined : res.cursor;
+      } while (cursor);
+    }
+    // 删除该用户的所有 session
+    let cursor2 = undefined;
+    do {
+      const res = await kv.list({ prefix: 'sess_', cursor: cursor2 });
+      for (const k of res.keys) {
+        try { const v = await kv.get(k.name); if (v === uname) await kv.delete(k.name); } catch(e){}
+      }
+      cursor2 = res.list_complete ? undefined : res.cursor;
+    } while (cursor2);
+  } catch(e){}
+  return json({ ok: true });
+}
+
+// ---------- DeepSeek 聊天代理 ----------
 // ---------- DeepSeek 聊天代理 ----------
 
 async function handleChat(request, env) {
@@ -295,8 +515,15 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === '/api/chat' && request.method === 'POST') return handleChat(request, env);
     if (url.pathname === '/api/auth' && request.method === 'POST') return handleAuth(request, env);
-    if (url.pathname === '/api/history' && request.method === 'GET') return handleHistoryGet(request, env);
-    if (url.pathname === '/api/history' && request.method === 'POST') return handleHistorySave(request, env);
+    if (url.pathname === '/api/convs' && request.method === 'GET') return handleConvsList(request, env);
+    if (url.pathname === '/api/conv' && request.method === 'GET') return handleConvGet(request, env);
+    if (url.pathname === '/api/conv' && request.method === 'POST') return handleConvSave(request, env);
+    if (url.pathname === '/api/conv' && request.method === 'DELETE') return handleConvDelete(request, env);
+    if (url.pathname === '/api/admin/users') return handleAdminUsers(request, env);
+    if (url.pathname === '/api/admin/user-convs') return handleAdminUserConvs(request, env);
+    if (url.pathname === '/api/admin/conv') return handleAdminConvView(request, env);
+    if (url.pathname === '/api/admin/delete-user' && request.method === 'POST') return handleAdminDeleteUser(request, env);
+    if (url.pathname === '/admin') return adminPage(env);
     if (url.pathname === '/api/turnstile-key') {
       return json({ ok: true, siteKey: (env.TURNSTILE_SITE_KEY || '').trim() });
     }

@@ -77,6 +77,19 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 #userModal .card button{ width:100%; border:none; border-radius:12px; padding:12px; font-size:15px; cursor:pointer; margin-top:8px; }
 #userModal .btn-out{ background:#3a2028; color:#ff8ba0; }
 #userModal .btn-close{ background:#2a2a34; color:var(--text); }
+#histWrap{ display:none; position:fixed; inset:0; z-index:80; }
+#histWrap.show{ display:block; }
+#histWrap .backdrop{ position:absolute; inset:0; background:rgba(0,0,0,.6); }
+#histWrap .drawer{ position:absolute; left:0; top:0; bottom:0; width:78%; max-width:300px; background:var(--card); border-right:1px solid #2c2c36; display:flex; flex-direction:column; }
+#histWrap .dhead{ padding:16px; border-bottom:1px solid #2c2c36; font-size:16px; font-weight:600; display:flex; justify-content:space-between; align-items:center; }
+#histWrap .dhead button{ background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; }
+#histList{ flex:1; overflow-y:auto; padding:10px; }
+.hist-item{ background:#1a1a21; border:1px solid #2c2c36; border-radius:12px; padding:12px; margin-bottom:8px; cursor:pointer; }
+.hist-item.active{ border-color:var(--acc); }
+.hist-item .t{ font-size:14px; margin-bottom:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.hist-item .d{ font-size:12px; color:var(--muted); display:flex; justify-content:space-between; }
+.hist-item .del{ color:#ff8ba0; font-size:12px; padding:2px 6px; }
+#newConvBtn{ margin:10px; background:var(--acc); color:#fff; border:none; border-radius:12px; padding:12px; font-size:15px; cursor:pointer; font-weight:600; }
 </style>
 </head>
 <body>
@@ -87,6 +100,7 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
     <option value="deepseek-flash">V4.1 Flash（可看图）</option>
     <option value="deepseek-v4-pro">V4 Pro（更强）</option>
   </select>
+  <button id="histBtn">🕐</button>
   <button id="newBtn">新对话</button>
   <span id="userBadge" title="点击退出">👤</span>
 </header>
@@ -149,6 +163,14 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
     <button class="btn-close" onclick="closeUserModal()">关闭</button>
   </div>
 </div>
+<div id="histWrap">
+  <div class="backdrop" onclick="closeHist()"></div>
+  <div class="drawer">
+    <div class="dhead"><span>🕐 历史对话</span><button onclick="closeHist()">✕</button></div>
+    <div id="histList"></div>
+    <button id="newConvBtn" onclick="newConversation()">＋ 新对话</button>
+  </div>
+</div>
 <script>
 var $ = function(id){ return document.getElementById(id); };
 var messages = []; // {role, content}
@@ -178,12 +200,7 @@ function showErr(t){
   $('chat').appendChild(d);
   $('chat').scrollTop = $('chat').scrollHeight;
 }
-$('newBtn').onclick = function(){
-  if (sending) stopGen();
-  messages = [];
-  $('chat').innerHTML = '<div class="hint">👋 新对话开始<br>直接输入问题开始聊天</div>';
-  saveHistory();
-};
+// newBtn 绑定见下方 bindLogin 后
 $('input').addEventListener('input', function(){
   this.style.height = 'auto';
   this.style.height = Math.min(this.scrollHeight, 120) + 'px';
@@ -416,35 +433,100 @@ function bindLogin(){
   if(ub) ub.onclick=function(){ showUserModal(); };
 }
 var saveTimer=null;
+var curConvId=null, convListCache=[];
 function saveHistory(){
   if(!authToken) return;
   clearTimeout(saveTimer);
   saveTimer=setTimeout(function(){
-    fetch('/api/history',{method:'POST',headers:authHeaders(),body:JSON.stringify({messages:messages})}).catch(function(){});
+    if(!messages.length && !curConvId) return;
+    fetch('/api/conv',{method:'POST',headers:authHeaders(),body:JSON.stringify({id:curConvId,messages:messages})})
+    .then(function(r){return r.json();}).then(function(j){
+      if(j.ok && j.id && !curConvId){ curConvId=j.id; }
+    }).catch(function(){});
   },1500);
+}
+function renderHistList(){
+  var el=document.getElementById('histList'); if(!el) return;
+  if(!convListCache.length){ el.innerHTML='<div style="text-align:center;color:var(--muted);padding:20px;font-size:14px">暂无历史对话</div>'; return; }
+  var h='';
+  convListCache.forEach(function(c){
+    var d=new Date(c.t); var ds=(d.getMonth()+1)+'-'+d.getDate()+' '+d.getHours()+':'+String(d.getMinutes()).padStart(2,'0');
+    var t=String(c.title||'新对话').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    h+='<div class="hist-item'+(c.id===curConvId?' active':'')+'" onclick="openConv(\''+c.id+'\')"><div class="t">'+t+'</div><div class="d"><span>'+ds+'</span><span class="del" onclick="event.stopPropagation();delConv(\''+c.id+'\')">删除</span></div></div>';
+  });
+  el.innerHTML=h;
+}
+async function refreshConvList(){
+  if(!authToken) return;
+  try{
+    var r=await fetch('/api/convs',{headers:authHeaders()});
+    var j=await r.json();
+    if(j.ok){ convListCache=j.convs||[]; renderHistList(); }
+  }catch(e){}
+}
+function openHist(){ refreshConvList(); var w=document.getElementById('histWrap'); if(w) w.classList.add('show'); }
+function closeHist(){ var w=document.getElementById('histWrap'); if(w) w.classList.remove('show'); }
+async function openConv(id){
+  closeHist();
+  if(id===curConvId) return;
+  try{
+    var r=await fetch('/api/conv?id='+encodeURIComponent(id),{headers:authHeaders()});
+    var j=await r.json();
+    if(!j.ok) return;
+    curConvId=id;
+    messages=Array.isArray(j.messages)?j.messages:[];
+    renderMessages();
+  }catch(e){}
+}
+async function delConv(id){
+  if(!confirm('删除这个对话？')) return;
+  try{
+    await fetch('/api/conv?id='+encodeURIComponent(id),{method:'DELETE',headers:authHeaders()});
+    convListCache=convListCache.filter(function(c){return c.id!==id;});
+    if(curConvId===id){ curConvId=null; messages=[]; renderMessages(); }
+    renderHistList();
+  }catch(e){}
+}
+function newConversation(){
+  closeHist();
+  curConvId=null; messages=[];
+  document.getElementById('chat').innerHTML='<div class="hint">👋 新对话开始<br>直接输入问题开始聊天</div>';
+}
+function renderMessages(){
+  var chat=document.getElementById('chat'); chat.innerHTML='';
+  if(!messages.length){ chat.innerHTML='<div class="hint">👋 你好，我是 DeepSeek<br>直接输入问题开始聊天，支持流式输出</div>'; return; }
+  messages.forEach(function(m){
+    var html;
+    if(Array.isArray(m.content)){
+      html=m.content.map(function(p){
+        if(p.type==='image_url') return '<div style="color:#9a9aa3;font-size:13px">[图片]</div>';
+        return md(String(p.text||''));
+      }).join('');
+    }else html=md(String(m.content||''));
+    addMsg(m.role==='assistant'?'ai':'user',html);
+  });
 }
 async function loadHistory(){
   if(!authToken) return;
   try{
-    var r=await fetch('/api/history',{headers:authHeaders()});
+    var r=await fetch('/api/convs',{headers:authHeaders()});
     var j=await r.json();
     if(!j.ok){ if(r.status===401) showLogin(); return; }
-    messages=Array.isArray(j.messages)?j.messages:[];
-    var chat=document.getElementById('chat'); chat.innerHTML='';
-    if(!messages.length){ chat.innerHTML='<div class="hint">👋 你好，我是 DeepSeek<br>直接输入问题开始聊天，支持流式输出</div>'; return; }
-    messages.forEach(function(m){
-      var html;
-      if(Array.isArray(m.content)){
-        html=m.content.map(function(p){
-          if(p.type==='image_url') return '<div style="color:#9a9aa3;font-size:13px">[图片]</div>';
-          return md(String(p.text||''));
-        }).join('');
-      }else html=md(String(m.content||''));
-      addMsg(m.role==='assistant'?'ai':'user',html);
-    });
+    convListCache=j.convs||[];
+    renderHistList();
+    if(convListCache.length){
+      openConv(convListCache[0].id);
+    }else{
+      renderMessages();
+    }
   }catch(e){}
 }
 bindLogin();
+// 新对话按钮 & 历史按钮
+(function(){
+  var nb=document.getElementById('newBtn'); if(nb) nb.onclick=function(){ newConversation(); };
+  var hb=document.getElementById('histBtn'); if(hb) hb.onclick=function(){ openHist(); };
+})();
 if(authToken&&authUser){ hideLogin(); var _b=document.getElementById('userBadge'); if(_b) _b.textContent='👤 '+authUser; loadHistory(); }
 else{ showLogin(); }
 </script>
