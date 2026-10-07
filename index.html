@@ -30,6 +30,9 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 .cursor::after{ content:"▍"; animation:blink 1s infinite; color:var(--acc); }
 @keyframes blink{ 50%{ opacity:0; } }
 #inputBar{ padding:10px 14px calc(10px + env(safe-area-inset-bottom)); border-top:1px solid #22222b; background:var(--bg); }
+#toolRow{ max-width:760px; margin:0 auto 8px; display:flex; gap:8px; }
+.pill{ border:1px solid #2c2c36; background:#1a1a21; color:var(--muted); border-radius:20px; padding:7px 14px; font-size:13px; cursor:pointer; }
+.pill.on{ border-color:var(--acc); color:var(--acc); background:rgba(74,158,255,.1); }
 #inputWrap{ max-width:760px; margin:0 auto; display:flex; gap:8px; align-items:flex-end; }
 #input{ flex:1; background:#1a1a21; border:1px solid #2c2c36; border-radius:14px; color:var(--text); font-size:15px; padding:12px 14px; outline:none; resize:none; max-height:120px; font-family:inherit; }
 #input:focus{ border-color:var(--acc); }
@@ -116,6 +119,10 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 </div>
 <div id="chatTsWrap"><div id="chatTs"></div></div>
 <div id="inputBar">
+  <div id="toolRow">
+    <button class="pill" id="thinkPill">🧠 深度思考</button>
+    <button class="pill" id="webPill">🌐 联网搜索</button>
+  </div>
   <div id="inputWrap">
     <button id="imgBtn" title="上传图片">🖼</button>
     <textarea id="input" rows="1" placeholder="输入消息…"></textarea>
@@ -231,6 +238,28 @@ $('input').addEventListener('keydown', function(e){
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
 $('sendBtn').onclick = function(){ sending ? stopGen() : send(); };
+// 深度思考 / 联网搜索开关
+var thinkOn = false, webOn = false;
+try {
+  thinkOn = localStorage.getItem('ds_think') === '1';
+  webOn = localStorage.getItem('ds_web') === '1';
+} catch(e){}
+function syncPills(){
+  $('thinkPill').classList.toggle('on', thinkOn);
+  $('webPill').classList.toggle('on', webOn);
+  $('modelSel').value = thinkOn ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
+}
+$('thinkPill').onclick = function(){
+  thinkOn = !thinkOn;
+  try { localStorage.setItem('ds_think', thinkOn ? '1' : '0'); } catch(e){}
+  syncPills();
+};
+$('webPill').onclick = function(){
+  webOn = !webOn;
+  try { localStorage.setItem('ds_web', webOn ? '1' : '0'); } catch(e){}
+  syncPills();
+};
+syncPills();
 // 图片上传（仅 deepseek-v4-flash 支持看图）
 var pendingImage = null; // dataURL
 $('imgBtn').onclick = function(){ $('imgInput').click(); };
@@ -260,6 +289,9 @@ $('imgInput').onchange = function(){
 };
 // 切换到 Pro 时若有待发送图片，提示
 $('modelSel').onchange = function(){
+  thinkOn = (this.value === 'deepseek-v4-pro');
+  try { localStorage.setItem('ds_think', thinkOn ? '1' : '0'); } catch(e){}
+  $('thinkPill').classList.toggle('on', thinkOn);
   if (this.value === 'deepseek-v4-pro' && pendingImage) {
     alert('V4 Pro 不支持看图，已为你切回的图片将被忽略（可换回 Flash）');
   }
@@ -293,6 +325,12 @@ async function send(){
   var btn = $('sendBtn'); btn.textContent = '■'; btn.classList.add('stop');
   var aiTs = Date.now();
   var aiDiv = addMsg('ai', '', aiTs);
+  if (webOn) {
+    var wb = document.createElement('div');
+    wb.style.cssText = 'font-size:12px;color:#4a9eff;margin-bottom:6px';
+    wb.textContent = '🌐 联网搜索已开启';
+    aiDiv.appendChild(wb);
+  }
   var thinkDiv = null, bodyDiv = null;
   var thinkText = '', bodyText = '';
   var isReasoner = $('modelSel').value === 'deepseek-reasoner';
@@ -303,7 +341,7 @@ async function send(){
     var resp = await fetch('/api/chat', {
       method:'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ model: $('modelSel').value, messages: messages, turnstile: tsToken }),
+      body: JSON.stringify({ model: $('modelSel').value, messages: messages, turnstile: tsToken, websearch: webOn }),
       signal: aborter.signal,
     });
     if (!resp.ok) {

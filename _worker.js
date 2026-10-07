@@ -25,6 +25,21 @@ async function sha256(str) {
 }
 function validUsername(u){ return /^[a-zA-Z]{1,8}$/.test(u); }
 function validPassword(p){ return /^[0-9]{1,10}$/.test(p); }
+// Brave 联网搜索，返回格式化文本，失败返回 null
+async function braveSearch(query, apiKey) {
+  try {
+    const r = await fetch('https://api.search.brave.com/res/v1/web/search?q=' + encodeURIComponent(query) + '&count=6&search_lang=zh-hans&text_decorations=0', {
+      headers: { 'Accept': 'application/json', 'X-Subscription-Token': apiKey },
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const items = (j.web && j.web.results) || [];
+    if (!items.length) return '（未搜到相关结果）';
+    return items.slice(0, 6).map(function(it, i){
+      return '[' + (i+1) + '] ' + (it.title || '') + '\n' + (it.description || '').slice(0, 300) + '\n来源：' + (it.url || '');
+    }).join('\n\n');
+  } catch(e){ return null; }
+}
 function randToken(){
   const a = new Uint8Array(24);
   crypto.getRandomValues(a);
@@ -316,6 +331,31 @@ async function handleChat(request, env) {
   const messages = Array.isArray(body.messages) ? body.messages.slice(-30) : [];
   if (!messages.length || !messages.some(function(m){ return m.role === 'user'; }))
     return json({ ok: false, error: '消息为空' }, 400);
+  // 联网搜索：用 Brave Search 搜最新信息，注入到最后一条用户消息
+  if (body.websearch === true) {
+    const braveKey = (env.BRAVE_API_KEY || '').trim();
+    if (!braveKey) return json({ ok: false, error: '联网搜索未配置：请在 Cloudflare Pages → Settings → Environment variables 添加 BRAVE_API_KEY（去 brave.com/search/api 免费申请）' }, 500);
+    let q = '';
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        const c = messages[i].content;
+        q = Array.isArray(c) ? c.filter(function(p){return p.type==='text';}).map(function(p){return p.text;}).join(' ') : String(c || '');
+        break;
+      }
+    }
+    q = q.trim().slice(0, 300);
+    if (!q) return json({ ok: false, error: '消息为空' }, 400);
+    const sr = await braveSearch(q, braveKey);
+    if (!sr) return json({ ok: false, error: '联网搜索失败，请稍后重试' }, 502);
+    const today = new Date().toISOString().slice(0, 10);
+    const ctx = '\n\n【联网搜索结果（' + today + '）】\n' + sr + '\n【要求】请结合以上最新搜索结果回答用户问题，引用信息时标注来源序号。';
+    const lastUser = messages[messages.length - 1];
+    if (Array.isArray(lastUser.content)) {
+      lastUser.content.push({ type: 'text', text: ctx });
+    } else {
+      lastUser.content = String(lastUser.content || '') + ctx;
+    }
+  }
   const clean = messages.map(function(m){
     const role = m.role === 'assistant' ? 'assistant' : 'user';
     if (Array.isArray(m.content)) {
