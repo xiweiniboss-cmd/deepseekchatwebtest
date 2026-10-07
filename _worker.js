@@ -246,7 +246,7 @@ function adminPage(env){
   + 'document.getElementById("fbBtn").onclick=async function(){var j=await api("/api/admin/feedbacks?site="+encodeURIComponent("[DeepSeek站]"));if(!j.ok){alert("失败");return;}window._fb=j.feedbacks;var h="";if(!j.feedbacks.length)h="<div class="card">暂无反馈</div>";for(var i=0;i<j.feedbacks.length;i++){var f=j.feedbacks[i];var fc=f.files&&f.files.length?(" | "+f.files.length+"个附件"):"";h+="<div class="card"><div>"+esc(f.text)+"</div><div style="color:#9a9aa3;font-size:12px;margin-top:6px">"+fmtT(f.t)+" | "+esc(f.ip||"--")+" "+esc(f.cc||"")+(f.contact?" | "+esc(f.contact):"")+fc+"</div><div id="fbf"+i+" style="display:none;margin-top:8px"></div></div>";}document.getElementById("fl").innerHTML=h;};'
   + 'document.getElementById("blBtn").onclick=loadBlacklist;'
   + 'document.getElementById("ki").addEventListener("keydown",function(e){if(e.key==="Enter")doLogin();});'
-  + '</scr'+'ipt></body></html>';
+  + '</script></body></html>';
   return new Response(h, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
 function adminAuth(request, env){
