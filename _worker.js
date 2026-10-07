@@ -41,6 +41,8 @@ async function getUserByToken(request, env) {
 async function handleAuth(request, env) {
   const kv = env.FEEDBACK_KV;
   if (!kv) return json({ ok: false, error: '暂未启用' }, 503);
+  const bl = await isBlacklisted(request, env);
+  if (bl) return json({ ok: false, error: '账号已被限制访问' }, 403);
   let body;
   try { body = await request.json(); } catch { return json({ ok: false, error: '请求格式错误' }, 400); }
   const action = body.action === 'register' ? 'register' : 'login';
@@ -65,6 +67,18 @@ async function handleAuth(request, env) {
   }
   const token = randToken();
   await kv.put('sess_' + token, username.toLowerCase(), { expirationTtl: 30*24*3600 });
+  const devId = getDeviceId(request);
+  if (devId) {
+    try {
+      const uk = 'user_' + username.toLowerCase();
+      const uraw = await kv.get(uk);
+      if (uraw) {
+        const u = JSON.parse(uraw);
+        u.dev = devId;
+        await kv.put(uk, JSON.stringify(u));
+      }
+    } catch(e){}
+  }
   return json({ ok: true, token, username });
 }
 // ---------- 多会话历史 ----------
@@ -202,6 +216,8 @@ function adminPage(env){
   + '<button class="bv" id="rfBtn">刷新</button><div id="ul"></div>'
   + '<h2 id="ct" class="hd"></h2><div id="cl"></div>'
   + '<h2 id="mt" class="hd"></h2><div id="ml"></div>'
+  + '<h2 style="margin-top:30px">🚫 黑名单</h2>'
+  + '<button class="bv" id="blBtn">刷新黑名单</button><div id="bl" style="margin-top:10px"></div>'
   + '<h2 style="margin-top:30px">💬 反馈记录 <span style="font-size:12px;color:#9a9aa3">[DeepSeek站]</span></h2>'
   + '<button class="bv" id="fbBtn">加载反馈</button><div id="fl" style="margin-top:10px"></div></div>'
   + '<script>'
@@ -210,14 +226,18 @@ function adminPage(env){
   + 'function esc(t){return String(t||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}function fmtT(t){var d=new Date(t);return d.getFullYear()+"-"+(d.getMonth()+1)+"-"+d.getDate()+" "+d.getHours()+":"+("0"+d.getMinutes()).slice(-2);}'
   + 'function api(p){return fetch(p+(p.indexOf("?")>=0?"&":"?")+"key="+encodeURIComponent(K)).then(function(r){return r.text();}).then(function(t){try{return JSON.parse(t);}catch(e){return{ok:false,error:"返回异常:"+t.slice(0,80)};}}).catch(function(e){return{ok:false,error:"网络错误"};});}'
   + 'async function doLogin(){lm("验证中…","#9a9aa3");K=document.getElementById("ki").value.trim();if(!K){lm("请输入密码");return;}var j=await api("/api/admin/users");if(!j.ok){lm(j.error||"密码错误");return;}document.getElementById("kb").className="hd";document.getElementById("mn").className="";showUsers(j.users);}'
-  + 'function showUsers(us){var h=\'\';if(!us.length)h=\'<div class="card">暂无用户</div>\';for(var i=0;i<us.length;i++){var u=us[i];h+=\'<div class="card"><div class="row"><div><b>\'+esc(u.username)+\'</b> \'+u.convs+\'个对话<br><span style="color:#9a9aa3;font-size:12px">\'+esc(u.model||\'--\')+\' | \'+esc(u.ip||\'--\')+\'</span><br><span style="color:#9a9aa3;font-size:12px">最后活跃: \'+(u.lastT?fmtT(u.lastT):\'--\')+\'</span><br><span style="color:#4a9eff;font-size:12px">Tokens: \'+(u.tokens?u.tokens.t.toLocaleString():\'0\')+\' (↑\'+(u.tokens?u.tokens.p.toLocaleString():\'0\')+\' ↓\'+(u.tokens?u.tokens.c.toLocaleString():\'0\')+\')</span></div><div><button class="bv" data-u="\'+esc(u.username)+\'" data-a="v">查看</button> <button class="bd" data-u="\'+esc(u.username)+\'" data-a="d">删除</button></div></div></div>\';}document.getElementById(\'ul\').innerHTML=h;bindBtns(\'ul\');}'
-  + 'function bindBtns(id){var el=document.getElementById(id);var bs=el.querySelectorAll("button[data-u]");for(var i=0;i<bs.length;i++){bs[i].onclick=function(){var u=this.getAttribute("data-u");var a=this.getAttribute("data-a");if(a==="v")viewConvs(u);else delUser(u);};}}'
+  + 'function showUsers(us){var h=\'\';if(!us.length)h=\'<div class="card">暂无用户</div>\';for(var i=0;i<us.length;i++){var u=us[i];h+=\'<div class="card"><div class="row"><div><b>\'+esc(u.username)+\'</b> \'+u.convs+\'个对话<br><span style="color:#9a9aa3;font-size:12px">\'+esc(u.model||\'--\')+\' | \'+esc(u.ip||\'--\')+\'</span><br><span style="color:#9a9aa3;font-size:12px">最后活跃: \'+(u.lastT?fmtT(u.lastT):\'--\')+\'</span><br><span style="color:#4a9eff;font-size:12px">Tokens: \'+(u.tokens?u.tokens.t.toLocaleString():\'0\')+\' (↑\'+(u.tokens?u.tokens.p.toLocaleString():\'0\')+\' ↓\'+(u.tokens?u.tokens.c.toLocaleString():\'0\')+\')</span></div><div><button class="bv" data-u="\'+esc(u.username)+\'" data-a="v">查看</button> <button class="bd" data-u="\'+esc(u.username)+\'" data-a="d">删除</button> <button class="bd" data-u="\'+esc(u.username)+\'" data-a="b" data-ip="\'+esc(u.ip||\'\')+\'" data-dev="\'+esc(u.dev||\'\')+\'">拉黑</button></div></div></div>\';}document.getElementById(\'ul\').innerHTML=h;bindBtns(\'ul\');}'
+  + 'function bindBtns(id){var el=document.getElementById(id);var bs=el.querySelectorAll("button[data-u]");for(var i=0;i<bs.length;i++){bs[i].onclick=function(){var u=this.getAttribute("data-u");var a=this.getAttribute("data-a");if(a==="v")viewConvs(u);else if(a==="b")blockUser(u,this.getAttribute("data-ip"),this.getAttribute("data-dev"));else delUser(u);};}}'
+  + 'async function blockUser(u,ip,dev){if(!ip&&!dev){alert("该用户无IP/设备记录");return;}if(!confirm("拉黑 "+u+" 的IP"+(ip?"("+ip+")":"")+(dev?"和设备":"")+"？"))return;var ok=true;if(ip){var r=await fetch("/api/admin/blacklist?key="+encodeURIComponent(K),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"ip",value:ip,username:u})});ok=ok&&(await r.json()).ok;}if(dev){var r2=await fetch("/api/admin/blacklist?key="+encodeURIComponent(K),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"device",value:dev,username:u})});ok=ok&&(await r2.json()).ok;}alert(ok?"已拉黑":"部分失败");loadBlacklist();}'
+  + 'async function loadBlacklist(){var j=await api("/api/admin/blacklist");if(!j.ok)return;var h="";if(!j.list.length)h="<div class=\\"card\\">黑名单为空</div>";for(var i=0;i<j.list.length;i++){var b=j.list[i];h+="<div class=\\"card\\"><div class=\\"row\\"><div><b>"+(b.type==="ip"?"IP":"设备")+"</b> "+esc(b.value)+"<br><span style=\\"color:#9a9aa3;font-size:12px\\">"+esc(b.username||"--")+" | "+fmtT(b.t)+"</span></div><button class=\\"bv\\" data-t=\\""+b.type+"\\" data-v=\\""+esc(b.value)+"\\">解除</button></div></div>";}var el=document.getElementById("bl");el.innerHTML=h;var bs=el.querySelectorAll("button[data-v]");for(var k=0;k<bs.length;k++){bs[k].onclick=function(){unblock(this.getAttribute("data-t"),this.getAttribute("data-v"));};}}'
+  + 'async function unblock(t,v){if(!confirm("解除拉黑 "+v+"？"))return;var r=await fetch("/api/admin/blacklist?key="+encodeURIComponent(K)+"&type="+t+"&value="+encodeURIComponent(v),{method:"DELETE"});var j=await r.json();if(j.ok)loadBlacklist();else alert("失败");}'
   + 'async function viewConvs(u){var j=await api(\'/api/admin/user-convs?user=\'+encodeURIComponent(u));if(!j.ok){alert(\'失败\');return;}document.getElementById(\'ml\').innerHTML=\'\';var t=document.getElementById(\'ct\');t.className=\'\';t.textContent=u+\' 的对话\';var h=\'\';if(!j.convs.length)h=\'<div class="card">无对话</div>\';for(var i=0;i<j.convs.length;i++){var c=j.convs[i];var ds=c.t?fmtT(c.t):\'--\';h+=\'<div class="card"><div class="row"><div><b>\'+esc(c.title)+\'</b><br><span style="color:#9a9aa3;font-size:12px">\'+ds+\'</span></div><button class="bv" data-u="\'+esc(u)+\'" data-c="\'+c.id+\'">查看内容</button></div></div>\';}var cl=document.getElementById(\'cl\');cl.innerHTML=h;var bs=cl.querySelectorAll(\'button[data-c]\');for(var k=0;k<bs.length;k++){bs[k].onclick=function(){viewMsgs(this.getAttribute(\'data-u\'),this.getAttribute(\'data-c\'));};}t.scrollIntoView();}'
   + 'async function viewMsgs(u,id){var j=await api(\'/api/admin/conv?user=\'+encodeURIComponent(u)+\'&id=\'+encodeURIComponent(id));if(!j.ok){alert(\'失败\');return;}var t=document.getElementById(\'mt\');t.className=\'\';t.textContent=\'对话内容\';var h=\'\';for(var i=0;i<j.messages.length;i++){var m=j.messages[i];var txt=Array.isArray(m.content)?m.content.map(function(p){return p.type===\'text\'?p.text:\'[图片]\';}).join(\'\'):String(m.content||\'\');h+=\'<div class="msg \'+m.role+\'"><div class="rl">\'+(m.role===\'user\'?\'用户\':\'AI\')+(m.t?\' <span style="color:#666">\'+fmtT(m.t)+\'</span>\':\'\')+\'</div>\'+esc(txt).replace(/\\n/g,\'<br>\')+\'</div>\';}document.getElementById(\'ml\').innerHTML=h||\'<div class="card">空</div>\';t.scrollIntoView();}'
   + 'async function delUser(u){if(!confirm("删除 "+u+" 及所有记录？不可恢复！"))return;var r=await fetch("/api/admin/delete-user?key="+encodeURIComponent(K),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({user:u})});var j=await r.json();if(j.ok){doLogin();}else{alert(j.error||"失败");}}'
   + 'document.getElementById("goBtn").onclick=doLogin;'
   + 'document.getElementById("rfBtn").onclick=doLogin;'
   + 'document.getElementById("fbBtn").onclick=async function(){var j=await api("/api/admin/feedbacks?site="+encodeURIComponent("[DeepSeek站]"));if(!j.ok){alert("失败");return;}var h="";if(!j.feedbacks.length)h="<div class=\\"card\\">暂无反馈</div>";for(var i=0;i<j.feedbacks.length;i++){var f=j.feedbacks[i];h+="<div class=\\"card\\"><div>"+esc(f.text)+"</div><div style=\\"color:#9a9aa3;font-size:12px;margin-top:6px\\">"+fmtT(f.t)+" | "+esc(f.ip||"--")+" "+esc(f.cc||"")+(f.contact?" | "+esc(f.contact):"")+(f.files?" | "+f.files+"个附件":"")+"</div></div>";}document.getElementById("fl").innerHTML=h;};'
+  + 'document.getElementById("blBtn").onclick=loadBlacklist;'
   + 'document.getElementById("ki").addEventListener("keydown",function(e){if(e.key==="Enter")doLogin();});'
   + '</scr'+'ipt></body></html>';
   return new Response(h, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
@@ -243,11 +263,11 @@ async function handleAdminUsers(request, env){
           const raw = await kv.get('convs_' + uname);
           if (raw) { const l = JSON.parse(raw); if (Array.isArray(l)) { convCount = l.length; for (const c of l) if (c.t > lastT) lastT = c.t; } }
         } catch(e){}
-        let regIp2='', lm='', tk=null;
-        try { const ur=await kv.get(k.name); if(ur) regIp2=JSON.parse(ur).ip||''; } catch(e){}
+        let regIp2='', lm='', tk=null, dev='';
+        try { const ur=await kv.get(k.name); if(ur) { const uo=JSON.parse(ur); regIp2=uo.ip||''; dev=uo.dev||''; } } catch(e){}
         try { lm=await kv.get('umodel_'+uname)||''; } catch(e){}
         try { const tr=await kv.get('tokens_'+uname); if(tr) tk=JSON.parse(tr); } catch(e){}
-        out.push({ username: uname, convs: convCount, ip: regIp2, model: lm, lastT: lastT, tokens: tk });
+        out.push({ username: uname, convs: convCount, ip: regIp2, model: lm, lastT: lastT, tokens: tk, dev: dev });
       }
       cursor = res.list_complete ? undefined : res.cursor;
     } while (cursor);
@@ -309,6 +329,8 @@ async function handleAdminDeleteUser(request, env){
 
 async function handleChat(request, env) {
  try {
+  const bl = await isBlacklisted(request, env);
+  if (bl) return json({ ok: false, error: '账号已被限制访问' }, 403);
   const username = await getUserByToken(request, env);
   if (!username) return json({ ok: false, error: '请先登录' }, 401);
 
@@ -520,6 +542,72 @@ async function handleAdminFeedbacks(request, env){
   return json({ ok: true, feedbacks: out.slice(0,100) });
 }
 
+function getDeviceId(request){
+  return (request.headers.get('x-device-id') || '').trim().slice(0,64);
+}
+async function isBlacklisted(request, env){
+  const kv = env.FEEDBACK_KV;
+  if (!kv) return null;
+  const ip = request.headers.get('cf-connecting-ip') || '';
+  const dev = getDeviceId(request);
+  try {
+    if (ip) {
+      const b = await kv.get('blackip_' + ip);
+      if (b) return { type: 'ip', value: ip };
+    }
+    if (dev) {
+      const b = await kv.get('blackdev_' + dev);
+      if (b) return { type: 'device', value: dev };
+    }
+  } catch(e){}
+  return null;
+}
+async function handleAdminBlacklist(request, env){
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const kv = env.FEEDBACK_KV;
+  const method = request.method;
+  if (method === 'GET') {
+    const out = [];
+    try {
+      for (const prefix of ['blackip_', 'blackdev_']) {
+        let cursor = undefined;
+        do {
+          const res = await kv.list({ prefix, cursor });
+          for (const k of res.keys) {
+            try {
+              const raw = await kv.get(k.name);
+              const it = raw ? JSON.parse(raw) : {};
+              out.push({ type: prefix === 'blackip_' ? 'ip' : 'device', value: k.name.slice(prefix.length), username: it.username || '', reason: it.reason || '', t: it.t || 0 });
+            } catch(e){}
+          }
+          cursor = res.list_complete ? undefined : res.cursor;
+        } while (cursor);
+      }
+    } catch(e){}
+    out.sort(function(a,b){ return b.t - a.t; });
+    return json({ ok: true, list: out });
+  }
+  if (method === 'POST') {
+    let body;
+    try { body = await request.json(); } catch { return json({ ok: false, error: '格式错误' }, 400); }
+    const type = body.type === 'device' ? 'device' : 'ip';
+    const value = String(body.value || '').trim().slice(0,100);
+    if (!value) return json({ ok: false, error: '参数错误' }, 400);
+    const key = (type === 'ip' ? 'blackip_' : 'blackdev_') + value;
+    await kv.put(key, JSON.stringify({ username: String(body.username||''), reason: String(body.reason||''), t: Date.now() }));
+    return json({ ok: true });
+  }
+  if (method === 'DELETE') {
+    const url = new URL(request.url);
+    const type = url.searchParams.get('type') === 'device' ? 'device' : 'ip';
+    const value = (url.searchParams.get('value') || '').trim().slice(0,100);
+    if (!value) return json({ ok: false, error: '参数错误' }, 400);
+    await kv.delete((type === 'ip' ? 'blackip_' : 'blackdev_') + value);
+    return json({ ok: true });
+  }
+  return json({ ok: false, error: '方法错误' }, 405);
+}
+
 function checkAdminKey(url, env) {
   const key = url.searchParams.get('key') || '';
   const adminKey = (env.FEEDBACK_ADMIN_KEY || '').trim();
@@ -582,6 +670,7 @@ export default {
     if (url.pathname === '/api/admin/conv') return handleAdminConvView(request, env);
     if (url.pathname === '/api/admin/delete-user' && request.method === 'POST') return handleAdminDeleteUser(request, env);
     if (url.pathname === '/api/admin/feedbacks') return handleAdminFeedbacks(request, env);
+    if (url.pathname === '/api/admin/blacklist') return handleAdminBlacklist(request, env);
     if (url.pathname === '/admin') return adminPage(env);
     if (url.pathname === '/api/turnstile-key') {
       return json({ ok: true, siteKey: (env.TURNSTILE_SITE_KEY || '').trim() });

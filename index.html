@@ -442,7 +442,8 @@ $('fbSend').onclick = async function(){
 // ---------- 登录 + 云端历史 ----------
 var authToken = null, authUser = null;
 try { authToken = localStorage.getItem('ds_token'); authUser = localStorage.getItem('ds_user'); } catch(e){}
-function authHeaders(){ return { 'Content-Type':'application/json', 'Authorization':'Bearer ' + (authToken||'') }; }
+function getDeviceId(){ try { var d = localStorage.getItem('ds_dev'); if(!d){ d = 'd'+Date.now().toString(36)+Math.random().toString(36).slice(2,9); localStorage.setItem('ds_dev', d); } return d; } catch(e){ return ''; } }
+function authHeaders(){ return { 'Content-Type':'application/json', 'Authorization':'Bearer ' + (authToken||''), 'X-Device-Id': getDeviceId() }; }
 function showLogin(){ var w=document.getElementById('loginWrap'); if(w) w.classList.remove('hide'); }
 function hideLogin(){ var w=document.getElementById('loginWrap'); if(w) w.classList.add('hide'); }
 function loginErr(m){ var e=document.getElementById('loginErr'); if(e){ e.textContent=m; e.style.display='block'; } }
@@ -455,7 +456,7 @@ async function doAuth(action){
   if(!/^[0-9]{1,10}$/.test(p)){ loginErr('密码为1-10位数字'); return; }
   loginErr('请求中…'); e.style.display='block'; e.style.color='#9a9aa3';
   try{
-    var r=await fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action,username:u,password:p})});
+    var r=await fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json','X-Device-Id':getDeviceId()},body:JSON.stringify({action:action,username:u,password:p})});
     var txt=await r.text(), j={};
     try{ j=JSON.parse(txt); }catch(je){ loginErr('服务器返回异常: '+txt.slice(0,80)); e.style.color='#ff8ba0'; return; }
     if(!j.ok){ loginErr(j.error||'失败'); e.style.color='#ff8ba0'; return; }
