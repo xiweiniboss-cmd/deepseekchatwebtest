@@ -243,7 +243,8 @@ function adminPage(env){
   + 'async function delUser(u){if(!confirm("删除 "+u+" 及所有记录？不可恢复！"))return;var r=await fetch("/api/admin/delete-user?key="+encodeURIComponent(K),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({user:u})});var j=await r.json();if(j.ok){doLogin();}else{alert(j.error||"失败");}}'
   + 'document.getElementById("goBtn").onclick=doLogin;'
   + 'document.getElementById("rfBtn").onclick=doLogin;'
-  + 'document.getElementById("fbBtn").onclick=async function(){var j=await api("/api/admin/feedbacks?site="+encodeURIComponent("[DeepSeek站]"));if(!j.ok){alert("失败");return;}var h="";if(!j.feedbacks.length)h="<div class="card">暂无反馈</div>";for(var i=0;i<j.feedbacks.length;i++){var f=j.feedbacks[i];h+="<div class="card"><div>"+esc(f.text)+"</div><div style="color:#9a9aa3;font-size:12px;margin-top:6px">"+fmtT(f.t)+" | "+esc(f.ip||"--")+" "+esc(f.cc||"")+(f.contact?" | "+esc(f.contact):"")+(f.files?" | "+f.files+"个附件":"")+"</div></div>";}document.getElementById("fl").innerHTML=h;};'
+  + 'document.getElementById("fbBtn").onclick=async function(){var j=await api("/api/admin/feedbacks?site="+encodeURIComponent("[DeepSeek站]"));if(!j.ok){alert("失败");return;}window._fb=j.feedbacks;var h="";if(!j.feedbacks.length)h="<div class="card">暂无反馈</div>";for(var i=0;i<j.feedbacks.length;i++){var f=j.feedbacks[i];var fc=f.files&&f.files.length?(" | "+f.files.length+"个附件 <button class="bv" style="padding:4px 10px;font-size:12px" onclick="toggleFbFiles("+i+")">查看</button>"):"";h+="<div class="card"><div>"+esc(f.text)+"</div><div style="color:#9a9aa3;font-size:12px;margin-top:6px">"+fmtT(f.t)+" | "+esc(f.ip||"--")+" "+esc(f.cc||"")+(f.contact?" | "+esc(f.contact):"")+fc+"</div><div id="fbf"+i+" style="display:none;margin-top:8px"></div></div>";}document.getElementById("fl").innerHTML=h;};'
+  + 'function toggleFbFiles(i){var f=window._fb[i];if(!f||!f.files)return;var el=document.getElementById("fbf"+i);if(el.style.display!=="none"){el.style.display="none";return;}var h="";for(var k=0;k<f.files.length;k++){var fl=f.files[k];var url="/api/admin/feedback-file?key="+encodeURIComponent(K)+"&k="+encodeURIComponent(fl.key);var nm=esc(fl.name||"附件");var tp=fl.type||"";if(tp.indexOf("image/")===0){h+="<div style="margin-bottom:8px"><img src=\\""+url+"\\" style="max-width:100%;border-radius:8px"><br><a href=\\""+url+"\\" target="_blank" style="color:#4a9eff;font-size:12px">"+nm+" (原图)</a></div>";}else if(tp.indexOf("video/")===0){h+="<div style="margin-bottom:8px"><video src=\\""+url+"\\" controls style="max-width:100%;border-radius:8px"></video><br><span style="font-size:12px;color:#9a9aa3">"+nm+"</span></div>";}else{h+="<div style="margin-bottom:6px"><a href=\\""+url+"\\" target="_blank" style="color:#4a9eff">📎 "+nm+"</a></div>";}}el.innerHTML=h||"<div style="color:#9a9aa3;font-size:12px">无</div>";el.style.display="block";}'
   + 'document.getElementById("blBtn").onclick=loadBlacklist;'
   + 'document.getElementById("ki").addEventListener("keydown",function(e){if(e.key==="Enter")doLogin();});'
   + '</scr'+'ipt></body></html>';
@@ -539,7 +540,7 @@ async function handleAdminFeedbacks(request, env){
           if (!raw) continue;
           const it = JSON.parse(raw);
           if (siteFilter && it.site !== siteFilter) continue;
-          out.push({ id: it.id, site: it.site, text: (it.text||'').slice(0,200), contact: it.contact||'', ip: it.ip||'', cc: it.cc||'', t: it.t||0, files: (it.files||[]).length });
+          out.push({ id: it.id, site: it.site, text: (it.text||'').slice(0,200), contact: it.contact||'', ip: it.ip||'', cc: it.cc||'', t: it.t||0, files: it.files||[] });
         } catch(e){}
       }
       cursor = res.list_complete ? undefined : res.cursor;
@@ -551,6 +552,26 @@ async function handleAdminFeedbacks(request, env){
 
 function getDeviceId(request){
   return (request.headers.get('x-device-id') || '').trim().slice(0,64);
+}
+async function handleAdminFeedbackFile(request, env){
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const key = new URL(request.url).searchParams.get('k') || '';
+  if (!key || key.includes('..')) return json({ ok: false, error: '参数错误' }, 400);
+  const bucket = env.FEEDBACK_BUCKET;
+  if (!bucket) return json({ ok: false, error: '未配置存储' }, 503);
+  try {
+    const obj = await bucket.get(key);
+    if (!obj) return json({ ok: false, error: '文件不存在' }, 404);
+    return new Response(obj.body, {
+      headers: {
+        'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream',
+        'Content-Disposition': 'inline',
+        'Cache-Control': 'public, max-age=86400',
+      },
+    });
+  } catch(e){
+    return json({ ok: false, error: '读取失败' }, 500);
+  }
 }
 async function isBlacklisted(request, env){
   const kv = env.FEEDBACK_KV;
@@ -569,8 +590,7 @@ async function isBlacklisted(request, env){
   } catch(e){}
   return null;
 }
-async function handleAdminBlacklist(request, env){
-  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+async function handleAdminBlacklist(request, env){  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
   const kv = env.FEEDBACK_KV;
   const method = request.method;
   if (method === 'GET') {
@@ -678,6 +698,7 @@ export default {
     if (url.pathname === '/api/admin/delete-user' && request.method === 'POST') return handleAdminDeleteUser(request, env);
     if (url.pathname === '/api/admin/feedbacks') return handleAdminFeedbacks(request, env);
     if (url.pathname === '/api/admin/blacklist') return handleAdminBlacklist(request, env);
+    if (url.pathname === '/api/admin/feedback-file') return handleAdminFeedbackFile(request, env);
     if (url.pathname === '/admin') return adminPage(env);
     if (url.pathname === '/api/turnstile-key') {
       return json({ ok: true, siteKey: (env.TURNSTILE_SITE_KEY || '').trim() });
