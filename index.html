@@ -331,79 +331,77 @@ $('fbSend').onclick = async function(){
 // ---------- 登录 + 云端历史 ----------
 var authToken = null, authUser = null;
 try { authToken = localStorage.getItem('ds_token'); authUser = localStorage.getItem('ds_user'); } catch(e){}
-function authHeaders(){ return { 'Content-Type':'application/json', 'Authorization':'Bearer ' + authToken }; }
-function showLogin() { $('loginWrap').classList.remove('hide'); }
-function hideLogin() { $('loginWrap').classList.add('hide'); }
-function loginErr(m){ var e=$('loginErr'); e.textContent=m; e.style.display='block'; }
+function authHeaders(){ return { 'Content-Type':'application/json', 'Authorization':'Bearer ' + (authToken||'') }; }
+function showLogin(){ var w=document.getElementById('loginWrap'); if(w) w.classList.remove('hide'); }
+function hideLogin(){ var w=document.getElementById('loginWrap'); if(w) w.classList.add('hide'); }
+function loginErr(m){ var e=document.getElementById('loginErr'); if(e){ e.textContent=m; e.style.display='block'; } }
 async function doAuth(action){
-  var u = $('loginUser').value.trim(), p = $('loginPass').value.trim();
-  $('loginErr').style.display='none';
-  if (!/^[a-zA-Z]{1,8}$/.test(u)) { loginErr('用户名为1-8个字母'); return; }
-  if (!/^[0-9]{1,10}$/.test(p)) { loginErr('密码为1-10位数字'); return; }
-  try {
-    var r = await fetch('/api/auth', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ action: action, username: u, password: p }) });
-    var j = await r.json();
-    if (!j.ok) { loginErr(j.error || '失败'); return; }
-    authToken = j.token; authUser = j.username;
-    try { localStorage.setItem('ds_token', authToken); localStorage.setItem('ds_user', authUser); } catch(e){}
+  var uEl=document.getElementById('loginUser'), pEl=document.getElementById('loginPass');
+  if(!uEl||!pEl){ loginErr('页面加载异常，请刷新'); return; }
+  var u=uEl.value.trim(), p=pEl.value.trim();
+  var e=document.getElementById('loginErr'); if(e) e.style.display='none';
+  if(!/^[a-zA-Z]{1,8}$/.test(u)){ loginErr('用户名为1-8个字母'); return; }
+  if(!/^[0-9]{1,10}$/.test(p)){ loginErr('密码为1-10位数字'); return; }
+  loginErr('请求中…'); e.style.display='block'; e.style.color='#9a9aa3';
+  try{
+    var r=await fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action,username:u,password:p})});
+    var txt=await r.text(), j={};
+    try{ j=JSON.parse(txt); }catch(je){ loginErr('服务器返回异常: '+txt.slice(0,80)); e.style.color='#ff8ba0'; return; }
+    if(!j.ok){ loginErr(j.error||'失败'); e.style.color='#ff8ba0'; return; }
+    authToken=j.token; authUser=j.username;
+    try{ localStorage.setItem('ds_token',authToken); localStorage.setItem('ds_user',authUser); }catch(e2){}
     hideLogin();
-    $('userBadge').textContent = '👤 ' + authUser;
-    await loadHistory();
-  } catch(e){ loginErr('网络错误'); }
+    var b=document.getElementById('userBadge'); if(b) b.textContent='👤 '+authUser;
+    loadHistory();
+  }catch(err){ loginErr('网络错误: '+(err&&err.message||'')); var e2=document.getElementById('loginErr'); if(e2) e2.style.color='#ff8ba0'; }
 }
-$('loginBtn').onclick = function(){ doAuth('login'); };
-$('regBtn').onclick = function(){ doAuth('register'); };
-$('loginPass').addEventListener('keydown', function(e){ if(e.key==='Enter') doAuth('login'); });
-$('userBadge').onclick = function(){
-  if (!confirm('退出登录？（聊天记录保留在云端）')) return;
-  authToken = null; authUser = null;
-  try { localStorage.removeItem('ds_token'); localStorage.removeItem('ds_user'); } catch(e){}
-  messages = []; $('chat').innerHTML = '';
-  $('userBadge').textContent = '👤';
-  showLogin();
-};
-var saveTimer = null;
+function bindLogin(){
+  var lb=document.getElementById('loginBtn'), rb=document.getElementById('regBtn');
+  if(lb) lb.onclick=function(){ doAuth('login'); };
+  if(rb) rb.onclick=function(){ doAuth('register'); };
+  var pe=document.getElementById('loginPass');
+  if(pe) pe.addEventListener('keydown',function(ev){ if(ev.key==='Enter') doAuth('login'); });
+  var ub=document.getElementById('userBadge');
+  if(ub) ub.onclick=function(){
+    if(!confirm('退出登录？（聊天记录保留在云端）')) return;
+    authToken=null; authUser=null;
+    try{ localStorage.removeItem('ds_token'); localStorage.removeItem('ds_user'); }catch(e){}
+    messages=[]; document.getElementById('chat').innerHTML='';
+    ub.textContent='👤'; showLogin();
+  };
+}
+var saveTimer=null;
 function saveHistory(){
-  if (!authToken) return;
+  if(!authToken) return;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(function(){
-    fetch('/api/history', { method:'POST', headers: authHeaders(),
-      body: JSON.stringify({ messages: messages }) }).catch(function(){});
-  }, 1500);
+  saveTimer=setTimeout(function(){
+    fetch('/api/history',{method:'POST',headers:authHeaders(),body:JSON.stringify({messages:messages})}).catch(function(){});
+  },1500);
 }
 async function loadHistory(){
-  if (!authToken) return;
-  try {
-    var r = await fetch('/api/history', { headers: authHeaders() });
-    var j = await r.json();
-    if (!j.ok) { if (r.status === 401) { showLogin(); } return; }
-    messages = Array.isArray(j.messages) ? j.messages : [];
-    $('chat').innerHTML = '';
-    if (!messages.length) {
-      $('chat').innerHTML = '<div class="hint">👋 你好，我是 DeepSeek<br>直接输入问题开始聊天，支持流式输出</div>';
-      return;
-    }
+  if(!authToken) return;
+  try{
+    var r=await fetch('/api/history',{headers:authHeaders()});
+    var j=await r.json();
+    if(!j.ok){ if(r.status===401) showLogin(); return; }
+    messages=Array.isArray(j.messages)?j.messages:[];
+    var chat=document.getElementById('chat'); chat.innerHTML='';
+    if(!messages.length){ chat.innerHTML='<div class="hint">👋 你好，我是 DeepSeek<br>直接输入问题开始聊天，支持流式输出</div>'; return; }
     messages.forEach(function(m){
       var html;
-      if (Array.isArray(m.content)) {
-        html = m.content.map(function(p){
-          if (p.type === 'image_url') return '<div style="color:#9a9aa3;font-size:13px">[图片]</div>';
+      if(Array.isArray(m.content)){
+        html=m.content.map(function(p){
+          if(p.type==='image_url') return '<div style="color:#9a9aa3;font-size:13px">[图片]</div>';
           return md(String(p.text||''));
         }).join('');
-      } else html = md(String(m.content||''));
-      addMsg(m.role === 'assistant' ? 'ai' : 'user', html);
+      }else html=md(String(m.content||''));
+      addMsg(m.role==='assistant'?'ai':'user',html);
     });
-  } catch(e){}
+  }catch(e){}
 }
-// 页面加载时检查登录
-if (authToken && authUser) {
-  hideLogin();
-  $('userBadge').textContent = '👤 ' + authUser;
-  loadHistory();
-} else {
-  showLogin();
-}
+bindLogin();
+if(authToken&&authUser){ hideLogin(); var _b=document.getElementById('userBadge'); if(_b) _b.textContent='👤 '+authUser; loadHistory(); }
+else{ showLogin(); }
 </script>
 <button id="fbBtn">💬</button>
 <div id="fbWrap">
