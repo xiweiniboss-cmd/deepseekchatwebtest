@@ -73,15 +73,16 @@ function cleanMessages(messages){
   messages = Array.isArray(messages) ? messages.slice(-60) : [];
   return messages.map(function(m){
     const role = m.role === 'assistant' ? 'assistant' : 'user';
+    const t = m.t || Date.now();
     if (Array.isArray(m.content)) {
       const parts = m.content.map(function(p){
         if (p && p.type === 'image_url') return { type: 'text', text: '[图片]' };
         if (p && p.type === 'text') return { type: 'text', text: String(p.text||'').slice(0,5000) };
         return null;
       }).filter(Boolean);
-      return { role, content: parts.length ? parts : [{type:'text',text:'(空)'}] };
+      return { role, content: parts.length ? parts : [{type:'text',text:'(空)'}], t };
     }
-    return { role, content: String(m.content||'').slice(0, 8000) };
+    return { role, content: String(m.content||'').slice(0, 8000), t };
   });
 }
 // 兼容旧版单会话：迁移到新格式

@@ -22,6 +22,8 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 .msg.ai code{ font-family:ui-monospace,Menlo,monospace; font-size:13px; }
 .msg .think{ color:var(--muted); font-size:13px; border-left:3px solid #2c2c36; padding-left:10px; margin-bottom:8px; white-space:pre-wrap; }
 .msg .think.done{ font-size:12px; cursor:pointer; }
+.msg .mtime{ font-size:11px; color:var(--muted); margin-top:6px; opacity:.7; }
+.msg.user .mtime{ text-align:right; }
 .msg .think .think-head{ color:var(--acc); user-select:none; }
 .msg .think .think-body{ display:none; margin-top:6px; color:var(--muted); }
 .msg .think.open .think-body{ display:block; }
@@ -193,13 +195,26 @@ function md(t){
   esc = esc.replace(/`([^`\n]+)`/g, '<code style="background:#101016;padding:2px 6px;border-radius:6px">$1</code>');
   return esc;
 }
-function addMsg(role, html){
+function addMsg(role, html, ts){
   var d = document.createElement('div');
   d.className = 'msg ' + role;
   if (html) d.innerHTML = html;
+  if (ts) {
+    var tm = document.createElement('div');
+    tm.className = 'mtime';
+    tm.textContent = fmtTime(ts);
+    d.appendChild(tm);
+  }
   $('chat').appendChild(d);
   $('chat').scrollTop = $('chat').scrollHeight;
   return d;
+}
+function fmtTime(t){
+  var d = new Date(t);
+  var now = new Date();
+  var hm = d.getHours() + ':' + ('0'+d.getMinutes()).slice(-2);
+  if (d.toDateString() === now.toDateString()) return hm;
+  return (d.getMonth()+1) + '-' + d.getDate() + ' ' + hm;
 }
 function showErr(t){
   var d = document.createElement('div');
@@ -267,15 +282,17 @@ async function send(){
   } else {
     userContent = text;
   }
-  messages.push({ role:'user', content: userContent });
+  var msgTs = Date.now();
+  messages.push({ role:'user', content: userContent, t: msgTs });
   var userHtml = md(text);
   if (useVision) userHtml = '<img src="' + imgData + '" style="max-width:100%;border-radius:10px;margin-bottom:8px"><br>' + userHtml;
-  addMsg('user', userHtml);
+  addMsg('user', userHtml, msgTs);
   $('input').value = ''; $('input').style.height = 'auto';
 
   sending = true;
   var btn = $('sendBtn'); btn.textContent = '■'; btn.classList.add('stop');
-  var aiDiv = addMsg('ai', '');
+  var aiTs = Date.now();
+  var aiDiv = addMsg('ai', '', aiTs);
   var thinkDiv = null, bodyDiv = null;
   var thinkText = '', bodyText = '';
   var isReasoner = $('modelSel').value === 'deepseek-reasoner';
@@ -335,11 +352,11 @@ async function send(){
       };
     }
     aiDiv.classList.remove('cursor');
-    messages.push({ role:'assistant', content: bodyText });
+    messages.push({ role:'assistant', content: bodyText, t: Date.now() });
   } catch(e) {
     aiDiv.classList.remove('cursor');
     if (e.name === 'AbortError') {
-      if (bodyText) messages.push({ role:'assistant', content: bodyText });
+      if (bodyText) messages.push({ role:'assistant', content: bodyText, t: Date.now() });
       else aiDiv.remove();
     } else {
       aiDiv.remove();
@@ -539,7 +556,7 @@ function renderMessages(){
         return md(String(p.text||''));
       }).join('');
     }else html=md(String(m.content||''));
-    addMsg(m.role==='assistant'?'ai':'user',html);
+    addMsg(m.role==='assistant'?'ai':'user',html,m.t);
   });
 }
 async function loadHistory(){
