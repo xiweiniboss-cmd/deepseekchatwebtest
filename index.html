@@ -67,6 +67,16 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 #loginBox .l-reg{ background:#2a2a34; color:var(--text); }
 #loginErr{ display:none; color:#ff8ba0; font-size:13px; margin-top:10px; }
 #userBadge{ font-size:12px; color:var(--muted); background:#1a1a21; border:1px solid #2c2c36; padding:6px 10px; border-radius:20px; cursor:pointer; }
+#userModal{ display:none; position:fixed; inset:0; z-index:90; align-items:center; justify-content:center; }
+#userModal.show{ display:flex; }
+#userModal .backdrop{ position:absolute; inset:0; background:rgba(0,0,0,.6); }
+#userModal .card{ position:relative; background:var(--card); border:1px solid #2c2c36; border-radius:18px; padding:24px; width:280px; text-align:center; }
+#userModal .card h3{ margin:0 0 12px; font-size:17px; }
+#userModal .card .uinfo{ font-size:14px; color:var(--muted); line-height:2; margin-bottom:16px; }
+#userModal .card .uinfo b{ color:var(--text); font-size:16px; }
+#userModal .card button{ width:100%; border:none; border-radius:12px; padding:12px; font-size:15px; cursor:pointer; margin-top:8px; }
+#userModal .btn-out{ background:#3a2028; color:#ff8ba0; }
+#userModal .btn-close{ background:#2a2a34; color:var(--text); }
 </style>
 </head>
 <body>
@@ -106,6 +116,37 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
       <button class="lbtn l-login" id="loginBtn" onclick="doAuth('login')">登录</button>
     </div>
     <div id="loginErr"></div>
+  </div>
+</div>
+
+<button id="fbBtn">💬</button>
+<div id="fbWrap">
+  <div class="backdrop"></div>
+  <div class="sheet">
+    <h3>💬 问题反馈</h3>
+    <p>遇到 bug 或有建议？告诉我吧，可附图（最多3张，20MB内）</p>
+    <textarea id="fbText" placeholder="描述你遇到的问题…"></textarea>
+    <input type="text" id="fbContact" placeholder="联系方式（选填）">
+    <input type="file" id="fbFiles" accept="image/*,video/*" multiple style="margin-top:10px;font-size:13px;color:var(--muted)">
+    <div id="fbTs" style="margin-top:12px"></div>
+    <div id="fbErr"></div>
+    <div class="row">
+      <button class="btn-ghost" id="fbCancel">取消</button>
+      <button class="btn-send" id="fbSend">提交反馈</button>
+    </div>
+  </div>
+</div>
+<div id="fbToast"></div>
+
+  </div>
+</div>
+<div id="userModal">
+  <div class="backdrop" onclick="closeUserModal()"></div>
+  <div class="card">
+    <h3>👤 登录信息</h3>
+    <div class="uinfo">用户名<br><b id="uinfoName">-</b><br><span style="font-size:12px">聊天记录云端同步中</span></div>
+    <button class="btn-out" onclick="doLogout()">退出登录</button>
+    <button class="btn-close" onclick="closeUserModal()">关闭</button>
   </div>
 </div>
 <script>
@@ -355,17 +396,24 @@ async function doAuth(action){
     loadHistory();
   }catch(err){ loginErr('网络错误: '+(err&&err.message||'')); var e2=document.getElementById('loginErr'); if(e2) e2.style.color='#ff8ba0'; }
 }
+function showUserModal(){
+  var n=document.getElementById('uinfoName'); if(n) n.textContent=authUser||'-';
+  var m=document.getElementById('userModal'); if(m) m.classList.add('show');
+}
+function closeUserModal(){ var m=document.getElementById('userModal'); if(m) m.classList.remove('show'); }
+function doLogout(){
+  closeUserModal();
+  authToken=null; authUser=null;
+  try{ localStorage.removeItem('ds_token'); localStorage.removeItem('ds_user'); }catch(e){}
+  messages=[]; document.getElementById('chat').innerHTML='';
+  var ub=document.getElementById('userBadge'); if(ub) ub.textContent='👤';
+  showLogin();
+}
 function bindLogin(){
   var pe=document.getElementById('loginPass');
   if(pe) pe.addEventListener('keydown',function(ev){ if(ev.key==='Enter') doAuth('login'); });
   var ub=document.getElementById('userBadge');
-  if(ub) ub.onclick=function(){
-    if(!confirm('退出登录？（聊天记录保留在云端）')) return;
-    authToken=null; authUser=null;
-    try{ localStorage.removeItem('ds_token'); localStorage.removeItem('ds_user'); }catch(e){}
-    messages=[]; document.getElementById('chat').innerHTML='';
-    ub.textContent='👤'; showLogin();
-  };
+  if(ub) ub.onclick=function(){ showUserModal(); };
 }
 var saveTimer=null;
 function saveHistory(){
@@ -400,26 +448,5 @@ bindLogin();
 if(authToken&&authUser){ hideLogin(); var _b=document.getElementById('userBadge'); if(_b) _b.textContent='👤 '+authUser; loadHistory(); }
 else{ showLogin(); }
 </script>
-<button id="fbBtn">💬</button>
-<div id="fbWrap">
-  <div class="backdrop"></div>
-  <div class="sheet">
-    <h3>💬 问题反馈</h3>
-    <p>遇到 bug 或有建议？告诉我吧，可附图（最多3张，20MB内）</p>
-    <textarea id="fbText" placeholder="描述你遇到的问题…"></textarea>
-    <input type="text" id="fbContact" placeholder="联系方式（选填）">
-    <input type="file" id="fbFiles" accept="image/*,video/*" multiple style="margin-top:10px;font-size:13px;color:var(--muted)">
-    <div id="fbTs" style="margin-top:12px"></div>
-    <div id="fbErr"></div>
-    <div class="row">
-      <button class="btn-ghost" id="fbCancel">取消</button>
-      <button class="btn-send" id="fbSend">提交反馈</button>
-    </div>
-  </div>
-</div>
-<div id="fbToast"></div>
-
-  </div>
-</div>
 </body>
 </html>
