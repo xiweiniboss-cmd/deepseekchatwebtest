@@ -192,7 +192,7 @@ button{border:none;border-radius:10px;padding:9px 14px;font-size:14px;cursor:poi
 #keyBox{text-align:center;margin-top:60px}.hide{display:none}
 input{background:#101016;border:1px solid #2c2c36;border-radius:10px;color:#e8e8ec;padding:12px;font-size:15px;width:220px;text-align:center}
 </style></head><body>
-<div id="keyBox"><h1>🔐 后台管理</h1><p style="color:#9a9aa3">请输入管理密码</p><input type="password" id="keyInput"><br><br><button class="btn-view" onclick="login()">进入</button></div>
+<div id="keyBox"><h1>🔐 后台管理</h1><p style="color:#9a9aa3">请输入管理密码</p><input type="password" id="keyInput"><br><br><button class="btn-view" id="loginBtn" onclick="login()">进入</button><div id="loginMsg" style="color:#ff8ba0;margin-top:10px"></div></div>
 <div id="main" class="hide">
 <h1>👥 用户管理 <span style="font-size:12px;color:#9a9aa3">[DeepSeek站]</span></h1>
 <button class="btn-back" onclick="loadUsers()">🔄 刷新</button>
@@ -202,12 +202,17 @@ input{background:#101016;border:1px solid #2c2c36;border-radius:10px;color:#e8e8
 </div>
 <script>
 var K='';
-function api(p){ return fetch(p+(p.includes('?')?'&':'?')+'key='+encodeURIComponent(K)).then(function(r){return r.json();}); }
-function login(){ K=document.getElementById('keyInput').value.trim(); if(!K) return; loadUsers(); }
+function api(p){ return fetch(p+(p.includes('?')?'&':'?')+'key='+encodeURIComponent(K)).then(function(r){ return r.text().then(function(t){ try{ return JSON.parse(t); }catch(e){ return {ok:false,error:'服务器返回异常:'+t.slice(0,100)}; } }); }).catch(function(e){ return {ok:false,error:'网络错误:'+(e&&e.message||'')}; }); }
+function login(){
+  var m=document.getElementById('loginMsg'); if(m){ m.style.color='#9a9aa3'; m.textContent='验证中…'; }
+  K=document.getElementById('keyInput').value.trim();
+  if(!K){ if(m){ m.style.color='#ff8ba0'; m.textContent='请输入密码'; } return; }
+  loadUsers();
+}
 function esc(t){ return String(t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 async function loadUsers(){
   var j=await api('/api/admin/users');
-  if(!j.ok){ alert(j.error||'密码错误'); return; }
+  if(!j.ok){ var m=document.getElementById('loginMsg'); if(m){ m.style.color='#ff8ba0'; m.textContent=j.error||'密码错误'; } else alert(j.error||'密码错误'); return; }
   document.getElementById('keyBox').classList.add('hide');
   document.getElementById('main').classList.remove('hide');
   document.getElementById('convList').innerHTML=''; document.getElementById('msgList').innerHTML='';
