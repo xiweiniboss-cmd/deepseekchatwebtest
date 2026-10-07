@@ -179,84 +179,43 @@ async function handleConvDelete(request, env){
 
 // ---------- 后台管理 ----------
 function adminPage(env){
-  const html = `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>DeepSeek站 后台</title>
-<style>*{box-sizing:border-box}body{margin:0;background:#0b0b0f;color:#e8e8ec;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;padding:16px;max-width:720px;margin:0 auto}
-h1{font-size:20px}h2{font-size:16px;margin-top:24px;color:#9a9aa3}
-.card{background:#14141a;border:1px solid #2c2c36;border-radius:14px;padding:14px;margin-bottom:10px}
-.row{display:flex;justify-content:space-between;align-items:center;gap:8px}
-button{border:none;border-radius:10px;padding:9px 14px;font-size:14px;cursor:pointer}
-.btn-view{background:#2a2a34;color:#e8e8ec}.btn-del{background:#3a2028;color:#ff8ba0}.btn-back{background:#2a2a34;color:#e8e8ec;margin-bottom:12px}
-.msg{border-left:3px solid #2c2c36;padding:8px 10px;margin:8px 0;font-size:14px;line-height:1.7;white-space:pre-wrap;word-break:break-word}
-.msg.user{border-color:#4a9eff}.msg.assistant{border-color:#22c55e}
-.msg .role{font-size:12px;color:#9a9aa3;margin-bottom:4px}
-#keyBox{text-align:center;margin-top:60px}.hide{display:none}
-input{background:#101016;border:1px solid #2c2c36;border-radius:10px;color:#e8e8ec;padding:12px;font-size:15px;width:220px;text-align:center}
-</style></head><body>
-<div id="keyBox"><h1>🔐 后台管理</h1><p style="color:#9a9aa3">请输入管理密码</p><input type="password" id="keyInput"><br><br><button class="btn-view" id="loginBtn" onclick="login()">进入</button><div id="loginMsg" style="color:#ff8ba0;margin-top:10px"></div></div>
-<div id="main" class="hide">
-<h1>👥 用户管理 <span style="font-size:12px;color:#9a9aa3">[DeepSeek站]</span></h1>
-<button class="btn-back" onclick="loadUsers()">🔄 刷新</button>
-<div id="userList"></div>
-<h2 id="convTitle" class="hide"></h2><div id="convList"></div>
-<h2 id="msgTitle" class="hide"></h2><div id="msgList"></div>
-</div>
-<script>
-window.onerror=function(msg,src,line){ var m=document.getElementById('loginMsg'); if(m){ m.style.color='#ff8ba0'; m.textContent='JS错误: '+msg+' (行'+line+')'; } return true; };
-var K='';
-function api(p){ return fetch(p+(p.includes('?')?'&':'?')+'key='+encodeURIComponent(K)).then(function(r){ return r.text().then(function(t){ try{ return JSON.parse(t); }catch(e){ return {ok:false,error:'服务器返回异常:'+t.slice(0,100)}; } }); }).catch(function(e){ return {ok:false,error:'网络错误:'+(e&&e.message||'')}; }); }
-function login(){
-  var m=document.getElementById('loginMsg'); if(m){ m.style.color='#9a9aa3'; m.textContent='验证中…'; }
-  K=document.getElementById('keyInput').value.trim();
-  if(!K){ if(m){ m.style.color='#ff8ba0'; m.textContent='请输入密码'; } return; }
-  loadUsers();
-}
-function esc(t){ return String(t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-async function loadUsers(){
-  var j=await api('/api/admin/users');
-  if(!j.ok){ var m=document.getElementById('loginMsg'); if(m){ m.style.color='#ff8ba0'; m.textContent=j.error||'密码错误'; } else alert(j.error||'密码错误'); return; }
-  document.getElementById('keyBox').classList.add('hide');
-  document.getElementById('main').classList.remove('hide');
-  document.getElementById('convList').innerHTML=''; document.getElementById('msgList').innerHTML='';
-  var h=j.users.length? '' : '<div class="card">暂无用户</div>';
-  j.users.forEach(function(u){
-    h+='<div class="card"><div class="row"><div><b>'+esc(u.username)+'</b> <span style="color:#9a9aa3;font-size:13px">'+u.convs+' 个对话</span></div><div><button class="btn-view" onclick="viewConvs(\''+esc(u.username)+'\')">查看</button> <button class="btn-del" onclick="delUser(\''+esc(u.username)+'\')">删除</button></div></div></div>';
-  });
-  document.getElementById('userList').innerHTML=h;
-}
-async function viewConvs(u){
-  var j=await api('/api/admin/user-convs?user='+encodeURIComponent(u));
-  if(!j.ok){ alert('失败'); return; }
-  document.getElementById('msgList').innerHTML='';
-  var t=document.getElementById('convTitle'); t.classList.remove('hide'); t.textContent='📝 '+u+' 的对话';
-  var h=j.convs.length?'':'<div class="card">无对话</div>';
-  j.convs.forEach(function(c){
-    var d=new Date(c.t); var ds=(d.getMonth()+1)+'-'+d.getDate()+' '+d.getHours()+':'+String(d.getMinutes()).padStart(2,'0');
-    h+='<div class="card"><div class="row"><div><b>'+esc(c.title)+'</b><br><span style="color:#9a9aa3;font-size:12px">'+ds+'</span></div><button class="btn-view" onclick="viewMsgs(\''+esc(u)+'\',\''+c.id+'\',\''+esc(c.title).replace(/'/g,"\\'")+'\')">查看内容</button></div></div>';
-  });
-  document.getElementById('convList').innerHTML=h;
-  document.getElementById('convTitle').scrollIntoView();
-}
-async function viewMsgs(u,id,title){
-  var j=await api('/api/admin/conv?user='+encodeURIComponent(u)+'&id='+encodeURIComponent(id));
-  if(!j.ok){ alert('失败'); return; }
-  var t=document.getElementById('msgTitle'); t.classList.remove('hide'); t.textContent='💬 '+title;
-  var h='';
-  j.messages.forEach(function(m){
-    var txt = Array.isArray(m.content) ? m.content.map(function(p){ return p.type==='text'?p.text:'[图片]'; }).join('') : String(m.content||'');
-    h+='<div class="msg '+m.role+'"><div class="role">'+(m.role==='user'?'用户':'AI')+'</div>'+esc(txt).replace(/\n/g,'<br>')+'</div>';
-  });
-  document.getElementById('msgList').innerHTML=h||'<div class="card">空</div>';
-  document.getElementById('msgTitle').scrollIntoView();
-}
-async function delUser(u){
-  if(!confirm('确定删除用户 '+u+' 及其所有聊天记录？不可恢复！')) return;
-  var r=await fetch('/api/admin/delete-user?key='+encodeURIComponent(K),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:u})});
-  var j=await r.json();
-  if(j.ok){ alert('已删除'); loadUsers(); } else alert(j.error||'失败');
-}
-document.getElementById('keyInput').addEventListener('keydown',function(e){ if(e.key==='Enter') login(); });
-</script></body></html>`;
-  return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+  const h = '<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">'
+  + '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">'
+  + '<title>DeepSeek站 后台</title>'
+  + '<style>*{box-sizing:border-box}body{margin:0;background:#0b0b0f;color:#e8e8ec;font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:16px;max-width:720px;margin:0 auto}'
+  + 'h1{font-size:20px}.card{background:#14141a;border:1px solid #2c2c36;border-radius:14px;padding:14px;margin-bottom:10px}'
+  + '.row{display:flex;justify-content:space-between;align-items:center;gap:8px}'
+  + 'button{border:none;border-radius:10px;padding:9px 14px;font-size:14px;cursor:pointer}'
+  + '.bv{background:#2a2a34;color:#e8e8ec}.bd{background:#3a2028;color:#ff8ba0}'
+  + '.msg{border-left:3px solid #2c2c36;padding:8px 10px;margin:8px 0;font-size:14px;line-height:1.7;white-space:pre-wrap;word-break:break-word}'
+  + '.msg.user{border-color:#4a9eff}.msg.assistant{border-color:#22c55e}.rl{font-size:12px;color:#9a9aa3;margin-bottom:4px}'
+  + '#kb{text-align:center;margin-top:60px}.hd{display:none}'
+  + 'input{background:#101016;border:1px solid #2c2c36;border-radius:10px;color:#e8e8ec;padding:12px;font-size:15px;width:220px;text-align:center}'
+  + '</style></head><body>'
+  + '<div id="kb"><h1>后台管理</h1><p style="color:#9a9aa3">请输入管理密码</p>'
+  + '<input type="password" id="ki"><br><br>'
+  + '<button class="bv" id="goBtn">进入</button>'
+  + '<div id="lm" style="margin-top:10px;min-height:20px"></div></div>'
+  + '<div id="mn" class="hd"><h1>用户管理 <span style="font-size:12px;color:#9a9aa3">[DeepSeek站]</span></h1>'
+  + '<button class="bv" id="rfBtn">刷新</button><div id="ul"></div>'
+  + '<h2 id="ct" class="hd"></h2><div id="cl"></div>'
+  + '<h2 id="mt" class="hd"></h2><div id="ml"></div></div>'
+  + '<script>'
+  + 'var K="";'
+  + 'function lm(t,c){var e=document.getElementById("lm");if(e){e.textContent=t;e.style.color=c||"#ff8ba0";}}'
+  + 'function esc(t){return String(t||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}'
+  + 'function api(p){return fetch(p+(p.indexOf("?")>=0?"&":"?")+"key="+encodeURIComponent(K)).then(function(r){return r.text();}).then(function(t){try{return JSON.parse(t);}catch(e){return{ok:false,error:"返回异常:"+t.slice(0,80)};}}).catch(function(e){return{ok:false,error:"网络错误"};});}'
+  + 'async function doLogin(){lm("验证中…","#9a9aa3");K=document.getElementById("ki").value.trim();if(!K){lm("请输入密码");return;}var j=await api("/api/admin/users");if(!j.ok){lm(j.error||"密码错误");return;}document.getElementById("kb").className="hd";document.getElementById("mn").className="";showUsers(j.users);}'
+  + 'function showUsers(us){var h="";if(!us.length)h="<div class=\"card\">暂无用户</div>";for(var i=0;i<us.length;i++){var u=us[i];h+="<div class=\"card\"><div class=\"row\"><div><b>"+esc(u.username)+"</b> "+u.convs+"个对话</div><div><button class=\"bv\" data-u=\""+esc(u.username)+"\" data-a=\"v\">查看</button> <button class=\"bd\" data-u=\""+esc(u.username)+"\" data-a=\"d\">删除</button></div></div></div>";}document.getElementById("ul").innerHTML=h;bindBtns("ul");}'
+  + 'function bindBtns(id){var el=document.getElementById(id);var bs=el.querySelectorAll("button[data-u]");for(var i=0;i<bs.length;i++){bs[i].onclick=function(){var u=this.getAttribute("data-u");var a=this.getAttribute("data-a");if(a==="v")viewConvs(u);else delUser(u);};}}'
+  + 'async function viewConvs(u){var j=await api("/api/admin/user-convs?user="+encodeURIComponent(u));if(!j.ok){alert("失败");return;}document.getElementById("ml").innerHTML="";var t=document.getElementById("ct");t.className="";t.textContent=u+" 的对话";var h="";if(!j.convs.length)h="<div class=\"card\">无对话</div>";for(var i=0;i<j.convs.length;i++){var c=j.convs[i];var d=new Date(c.t);var ds=(d.getMonth()+1)+"-"+d.getDate()+" "+d.getHours()+":"+("0"+d.getMinutes()).slice(-2);h+="<div class=\"card\"><div class=\"row\"><div><b>"+esc(c.title)+"</b><br><span style=\"color:#9a9aa3;font-size:12px\">"+ds+"</span></div><button class=\"bv\" data-u=\""+esc(u)+"\" data-c=\""+c.id+"\">查看内容</button></div></div>";}var cl=document.getElementById("cl");cl.innerHTML=h;var bs=cl.querySelectorAll("button[data-c]");for(var k=0;k<bs.length;k++){bs[k].onclick=function(){viewMsgs(this.getAttribute("data-u"),this.getAttribute("data-c"));};}t.scrollIntoView();}'
+  + 'async function viewMsgs(u,id){var j=await api("/api/admin/conv?user="+encodeURIComponent(u)+"&id="+encodeURIComponent(id));if(!j.ok){alert("失败");return;}var t=document.getElementById("mt");t.className="";t.textContent="对话内容";var h="";for(var i=0;i<j.messages.length;i++){var m=j.messages[i];var txt=Array.isArray(m.content)?m.content.map(function(p){return p.type==="text"?p.text:"[图片]";}).join(""):String(m.content||"");h+="<div class=\"msg "+m.role+"\"><div class=\"rl\">"+(m.role==="user"?"用户":"AI")+"</div>"+esc(txt).replace(/\\n/g,"<br>")+"</div>";}document.getElementById("ml").innerHTML=h||"<div class=\"card\">空</div>";t.scrollIntoView();}'
+  + 'async function delUser(u){if(!confirm("删除 "+u+" 及所有记录？不可恢复！"))return;var r=await fetch("/api/admin/delete-user?key="+encodeURIComponent(K),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({user:u})});var j=await r.json();if(j.ok){doLogin();}else{alert(j.error||"失败");}}'
+  + 'document.getElementById("goBtn").onclick=doLogin;'
+  + 'document.getElementById("rfBtn").onclick=doLogin;'
+  + 'document.getElementById("ki").addEventListener("keydown",function(e){if(e.key==="Enter")doLogin();});'
+  + '</scr'+'ipt></body></html>';
+  return new Response(h, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
 function adminAuth(request, env){
   const key = (env.FEEDBACK_ADMIN_KEY || '').trim();
@@ -340,6 +299,7 @@ async function handleAdminDeleteUser(request, env){
 // ---------- DeepSeek 聊天代理 ----------
 
 async function handleChat(request, env) {
+ try {
   const username = await getUserByToken(request, env);
   if (!username) return json({ ok: false, error: '请先登录' }, 401);
 
@@ -414,6 +374,9 @@ async function handleChat(request, env) {
   } catch (e) {
     return json({ ok: false, error: '连接 DeepSeek 失败，请稍后重试' }, 502);
   }
+ } catch (e) {
+   return json({ ok: false, error: '服务器内部错误: ' + (e && e.message || '未知') }, 500);
+ }
 }
 
 // ---------- 反馈系统（与其他站共用 KV/R2） ----------
