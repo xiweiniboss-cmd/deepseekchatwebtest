@@ -62,6 +62,16 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 #fbWrap .btn-send{ flex:1; background:var(--acc); border:none; border-radius:12px; font-size:15px; padding:13px 0; color:#fff; cursor:pointer; font-weight:600; }
 #fbErr{ display:none; color:#ff8ba0; font-size:13px; margin-top:10px; }
 #fbToast{ display:none; position:fixed; left:50%; bottom:100px; transform:translateX(-50%); background:rgba(0,0,0,.85); color:#fff; font-size:13px; padding:10px 18px; border-radius:20px; z-index:99; }
+#noticeWrap{ display:none; position:fixed; inset:0; z-index:120; align-items:center; justify-content:center; padding:24px; }
+#noticeWrap.show{ display:flex; }
+#noticeWrap .backdrop{ position:absolute; inset:0; background:rgba(0,0,0,.7); }
+#noticeWrap .card{ position:relative; background:var(--card); border:1px solid #2c2c36; border-radius:18px; padding:24px 22px; width:100%; max-width:340px; }
+#noticeWrap .card h3{ margin:0 0 12px; font-size:17px; text-align:center; }
+#noticeWrap .card ol{ margin:0; padding-left:20px; font-size:14px; line-height:1.9; color:var(--text); }
+#noticeWrap .card ol li{ margin-bottom:4px; }
+#noticeWrap .nrow{ display:flex; align-items:center; gap:8px; margin:14px 0 12px; font-size:13px; color:var(--muted); cursor:pointer; }
+#noticeWrap .nrow input{ width:16px; height:16px; accent-color:var(--acc); }
+#noticeWrap .btn-ok{ width:100%; border:none; border-radius:12px; padding:13px 0; font-size:15px; font-weight:600; background:var(--acc); color:#fff; cursor:pointer; }
 #loginWrap{ position:fixed; inset:0; z-index:100; background:var(--bg); display:flex; align-items:center; justify-content:center; padding:20px; }
 #loginWrap.hide{ display:none; }
 #loginBox{ background:var(--card); border:1px solid #2c2c36; border-radius:18px; padding:28px 24px; width:100%; max-width:340px; text-align:center; }
@@ -132,6 +142,18 @@ body::after{content:"";position:fixed;inset:0;background:url('/bg.jpg') center/c
   <div id="imgPreview" style="display:none;max-width:760px;margin:8px auto 0;position:relative">
     <img id="imgPrevImg" style="max-height:120px;border-radius:10px">
     <button id="imgRemove" style="position:absolute;top:-8px;left:110px;background:#e5484d;color:#fff;border:none;border-radius:50%;width:24px;height:24px;font-size:14px;cursor:pointer">×</button>
+  </div>
+</div>
+<div id="noticeWrap">
+  <div class="backdrop"></div>
+  <div class="card">
+    <h3>📢 公告</h3>
+    <ol>
+      <li>本站为可乐的DeepSeek站，为防止账号丢失请先注册，用户名和密码需要自行记住，本站无法找回</li>
+      <li>如有bug欢迎使用反馈系统反馈</li>
+    </ol>
+    <label class="nrow"><input type="checkbox" id="noticeHide"> 下次不再显示</label>
+    <button class="btn-ok" id="noticeOk">我知道了</button>
   </div>
 </div>
 <div id="loginWrap">
@@ -639,6 +661,22 @@ async function loadHistory(){
   }catch(e){}
 }
 bindLogin();
+// ---------- 进站公告 ----------
+(function(){
+  var hide = false;
+  try { hide = localStorage.getItem('ds_notice_hide') === '1'; } catch(e){}
+  if (hide) return;
+  var w = document.getElementById('noticeWrap');
+  if (!w) return;
+  w.classList.add('show');
+  var ok = document.getElementById('noticeOk');
+  if (ok) ok.onclick = function(){
+    try {
+      if (document.getElementById('noticeHide').checked) localStorage.setItem('ds_notice_hide', '1');
+    } catch(e){}
+    w.classList.remove('show');
+  };
+})();
 // 新对话按钮 & 历史按钮
 (function(){
   var nb=document.getElementById('newBtn'); if(nb) nb.onclick=function(){ newConversation(); };
