@@ -21,7 +21,10 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 .msg.ai pre{ background:#101016; padding:10px; border-radius:8px; overflow-x:auto; font-size:13px; }
 .msg.ai code{ font-family:ui-monospace,Menlo,monospace; font-size:13px; }
 .msg .think{ color:var(--muted); font-size:13px; border-left:3px solid #2c2c36; padding-left:10px; margin-bottom:8px; white-space:pre-wrap; }
-.msg .think.done{ font-size:12px; }
+.msg .think.done{ font-size:12px; cursor:pointer; }
+.msg .think .think-head{ color:var(--acc); user-select:none; }
+.msg .think .think-body{ display:none; margin-top:6px; color:var(--muted); }
+.msg .think.open .think-body{ display:block; }
 .cursor::after{ content:"▍"; animation:blink 1s infinite; color:var(--acc); }
 @keyframes blink{ 50%{ opacity:0; } }
 #inputBar{ padding:10px 14px calc(10px + env(safe-area-inset-bottom)); border-top:1px solid #22222b; background:var(--bg); }
@@ -181,6 +184,7 @@ var aborter = null;
 var sending = false;
 
 // 简单 markdown：代码块 + 行内代码 + 换行
+function escHtml(t){ return String(t||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 function md(t){
   var esc = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   esc = esc.replace(/```(\w*)\n([\s\S]*?)```/g, function(m, lang, code){
@@ -311,7 +315,7 @@ async function send(){
           if (delta.reasoning_content) {
             thinkText += delta.reasoning_content;
             if (!thinkDiv) { thinkDiv = document.createElement('div'); thinkDiv.className = 'think'; aiDiv.appendChild(thinkDiv); }
-            thinkDiv.textContent = '💭 思考中…\n' + thinkText.slice(-800);
+            thinkDiv.innerHTML = '<div class="think-head">💭 思考中…</div><div class="think-body">' + escHtml(thinkText.slice(-2000)) + '</div>';
           }
           if (delta.content) {
             bodyText += delta.content;
@@ -322,7 +326,14 @@ async function send(){
       }
       $('chat').scrollTop = $('chat').scrollHeight;
     }
-    if (thinkDiv) { thinkDiv.className = 'think done'; thinkDiv.textContent = '💭 思考过程（已收起）'; thinkDiv.title = thinkText; }
+    if (thinkDiv) {
+      thinkDiv.className = 'think done';
+      thinkDiv.innerHTML = '<div class="think-head">💭 思考过程 ▸ 点击展开</div><div class="think-body">' + escHtml(thinkText) + '</div>';
+      thinkDiv.onclick = function(){
+        var open = this.classList.toggle('open');
+        this.querySelector('.think-head').textContent = open ? '💭 思考过程 ▾ 点击收起' : '💭 思考过程 ▸ 点击展开';
+      };
+    }
     aiDiv.classList.remove('cursor');
     messages.push({ role:'assistant', content: bodyText });
   } catch(e) {
