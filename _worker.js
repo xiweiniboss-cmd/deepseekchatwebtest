@@ -25,20 +25,37 @@ async function sha256(str) {
 }
 function validUsername(u){ return /^[a-zA-Z]{1,8}$/.test(u); }
 function validPassword(p){ return /^[0-9]{1,10}$/.test(p); }
-// Brave 联网搜索，返回格式化文本，失败返回 null
+// Brave 联网搜索：网页 + 新闻双通道，过滤无意义结果，失败返回 null
 async function braveSearch(query, apiKey) {
-  try {
-    const r = await fetch('https://api.search.brave.com/res/v1/web/search?q=' + encodeURIComponent(query) + '&count=6&search_lang=zh-hans&text_decorations=0', {
-      headers: { 'Accept': 'application/json', 'X-Subscription-Token': apiKey },
-    });
-    if (!r.ok) return null;
-    const j = await r.json();
-    const items = (j.web && j.web.results) || [];
-    if (!items.length) return '（未搜到相关结果）';
-    return items.slice(0, 6).map(function(it, i){
-      return '[' + (i+1) + '] ' + (it.title || '') + '\n' + (it.description || '').slice(0, 300) + '\n来源：' + (it.url || '');
-    }).join('\n\n');
-  } catch(e){ return null; }
+  async function callApi(path) {
+    try {
+      const r = await fetch('https://api.search.brave.com/res/v1/' + path + '?q=' + encodeURIComponent(query) + '&count=8&search_lang=zh-hans&text_decorations=0', {
+        headers: { 'Accept': 'application/json', 'X-Subscription-Token': apiKey },
+      });
+      if (!r.ok) return [];
+      const j = await r.json();
+      if (path.indexOf('news') === 0) return j.results || [];
+      return (j.web && j.web.results) || [];
+    } catch(e){ return []; }
+  }
+  const web = await callApi('web/search');
+  const news = await callApi('news/search');
+  // 新闻优先，其次网页；过滤门户首页类无意义结果
+  const junkRe = /^(www\.)?(google\.[a-z.]+|translate\.google\.[a-z.]+|baidu\.com|bing\.com|yahoo\.com|so\.com|sogou\.com|googleusercontent\.com)\/?([?#].*)?$/i;
+  const seen = {};
+  const all = news.concat(web).filter(function(it){
+    const u = String(it.url || '').replace(/^https?:\/\//, '');
+    if (!u || junkRe.test(u)) return false;
+    if (!(it.title && it.description)) return false;
+    const key = u.split('?')[0].toLowerCase();
+    if (seen[key]) return false;
+    seen[key] = 1;
+    return true;
+  }).slice(0, 8);
+  if (!all.length) return '（未搜到有效结果）';
+  return all.map(function(it, i){
+    return '[' + (i+1) + '] ' + (it.title || '') + '\n' + (it.description || '').slice(0, 300) + '\n来源：' + (it.url || '');
+  }).join('\n\n');
 }
 function randToken(){
   const a = new Uint8Array(24);
