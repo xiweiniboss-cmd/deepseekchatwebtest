@@ -50,6 +50,13 @@ async function handleAuth(request, env) {
   const password = String(body.password || '').trim();
   if (!validUsername(username)) return json({ ok: false, error: '用户名为1-8个字母' }, 400);
   if (!validPassword(password)) return json({ ok: false, error: '密码为1-10位数字' }, 400);
+  if (env.TURNSTILE_SECRET_KEY) {
+    const tsToken = String(body.turnstile || '').trim();
+    if (!tsToken) return json({ ok: false, error: '请先完成人机验证' }, 400);
+    const ip = request.headers.get('cf-connecting-ip') || '';
+    const tsOk = await verifyTurnstile(tsToken, env.TURNSTILE_SECRET_KEY, ip);
+    if (!tsOk) return json({ ok: false, error: '人机验证失败，请重试' }, 400);
+  }
   const ukey = 'user_' + username.toLowerCase();
   const passHash = await sha256('ds:' + username.toLowerCase() + ':' + password);
   if (action === 'register') {

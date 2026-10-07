@@ -137,7 +137,7 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
       <button class="lbtn l-reg" id="regBtn" onclick="doAuth('register')">注册</button>
       <button class="lbtn l-login" id="loginBtn" onclick="doAuth('login')">登录</button>
     </div>
-    <div id="loginErr"></div>
+    <div id="loginTs" style="display:flex;justify-content:center;margin:4px 0 8px;min-height:65px"></div><div id="loginErr"></div>
   </div>
 </div>
 
@@ -444,7 +444,7 @@ var authToken = null, authUser = null;
 try { authToken = localStorage.getItem('ds_token'); authUser = localStorage.getItem('ds_user'); } catch(e){}
 function getDeviceId(){ try { var d = localStorage.getItem('ds_dev'); if(!d){ d = 'd'+Date.now().toString(36)+Math.random().toString(36).slice(2,9); localStorage.setItem('ds_dev', d); } return d; } catch(e){ return ''; } }
 function authHeaders(){ return { 'Content-Type':'application/json', 'Authorization':'Bearer ' + (authToken||''), 'X-Device-Id': getDeviceId() }; }
-function showLogin(){ var w=document.getElementById('loginWrap'); if(w) w.classList.remove('hide'); }
+function showLogin(){ var w=document.getElementById('loginWrap'); if(w) w.classList.remove('hide'); ; ensureLoginTs(); }
 function hideLogin(){ var w=document.getElementById('loginWrap'); if(w) w.classList.add('hide'); }
 function loginErr(m){ var e=document.getElementById('loginErr'); if(e){ e.textContent=m; e.style.display='block'; } }
 async function doAuth(action){
@@ -456,10 +456,13 @@ async function doAuth(action){
   if(!/^[0-9]{1,10}$/.test(p)){ loginErr('密码为1-10位数字'); return; }
   loginErr('请求中…'); e.style.display='block'; e.style.color='#9a9aa3';
   try{
-    var r=await fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json','X-Device-Id':getDeviceId()},body:JSON.stringify({action:action,username:u,password:p})});
+    var tsToken='';
+  try { if (loginTsId !== null && window.turnstile) tsToken = turnstile.getResponse(loginTsId); } catch(e){}
+  var r=await fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json','X-Device-Id':getDeviceId()},body:JSON.stringify({action:action,username:u,password:p,turnstile:tsToken})});
     var txt=await r.text(), j={};
     try{ j=JSON.parse(txt); }catch(je){ loginErr('服务器返回异常: '+txt.slice(0,80)); e.style.color='#ff8ba0'; return; }
     if(!j.ok){ loginErr(j.error||'失败'); e.style.color='#ff8ba0'; return; }
+    try { if (loginTsId !== null && window.turnstile) turnstile.reset(loginTsId); } catch(e){}
     authToken=j.token; authUser=j.username;
     try{ localStorage.setItem('ds_token',authToken); localStorage.setItem('ds_user',authUser); }catch(e2){}
     hideLogin();
@@ -479,6 +482,23 @@ function doLogout(){
   messages=[]; document.getElementById('chat').innerHTML='';
   var ub=document.getElementById('userBadge'); if(ub) ub.textContent='👤';
   showLogin();
+}
+var loginTsId = null;
+function renderLoginTs(){
+  fetch('/api/turnstile-key').then(function(r){return r.json()}).then(function(j){
+    var el = document.getElementById('loginTs');
+    if (j.siteKey && el && el.children.length === 0 && window.turnstile) {
+      loginTsId = turnstile.render('#loginTs', { sitekey: j.siteKey, theme: 'dark' });
+    }
+  }).catch(function(){});
+}
+function ensureLoginTs(){
+  if (!window.turnstile) {
+    var sc = document.createElement('script');
+    sc.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
+    sc.onload = function(){ renderLoginTs(); renderChatTs(); };
+    document.head.appendChild(sc);
+  } else renderLoginTs();
 }
 function bindLogin(){
   var pe=document.getElementById('loginPass');
