@@ -95,6 +95,17 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
     <button id="imgRemove" style="position:absolute;top:-8px;left:110px;background:#e5484d;color:#fff;border:none;border-radius:50%;width:24px;height:24px;font-size:14px;cursor:pointer">×</button>
   </div>
 </div>
+<div id="loginWrap">
+  <div id="loginBox">
+    <h2>🔐 登录</h2>
+    <p>用户名：1-8个字母<br>密码：1-10位数字<br>聊天记录云端保存，换设备不丢</p>
+    <input id="loginUser" maxlength="8" placeholder="用户名" autocomplete="off" autocapitalize="off">
+    <input id="loginPass" type="password" maxlength="10" inputmode="numeric" placeholder="密码">
+    <div class="lrow">
+      <button class="lbtn l-reg" id="regBtn">注册</button>
+      <button class="lbtn l-login" id="loginBtn">登录</button>
+    </div>
+    <div id="loginErr"></div>
 <script>
 var $ = function(id){ return document.getElementById(id); };
 var messages = []; // {role, content}
@@ -410,17 +421,7 @@ if (authToken && authUser) {
   </div>
 </div>
 <div id="fbToast"></div>
-<div id="loginWrap">
-  <div id="loginBox">
-    <h2>🔐 登录</h2>
-    <p>用户名：1-8个字母<br>密码：1-10位数字<br>聊天记录云端保存，换设备不丢</p>
-    <input id="loginUser" maxlength="8" placeholder="用户名" autocomplete="off" autocapitalize="off">
-    <input id="loginPass" type="password" maxlength="10" inputmode="numeric" placeholder="密码">
-    <div class="lrow">
-      <button class="lbtn l-reg" id="regBtn">注册</button>
-      <button class="lbtn l-login" id="loginBtn">登录</button>
-    </div>
-    <div id="loginErr"></div>
+
   </div>
 </div>
 </body>
