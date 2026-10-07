@@ -201,7 +201,9 @@ function adminPage(env){
   + '<div id="mn" class="hd"><h1>用户管理 <span style="font-size:12px;color:#9a9aa3">[DeepSeek站]</span></h1>'
   + '<button class="bv" id="rfBtn">刷新</button><div id="ul"></div>'
   + '<h2 id="ct" class="hd"></h2><div id="cl"></div>'
-  + '<h2 id="mt" class="hd"></h2><div id="ml"></div></div>'
+  + '<h2 id="mt" class="hd"></h2><div id="ml"></div>'
+  + '<h2 style="margin-top:30px">💬 反馈记录 <span style="font-size:12px;color:#9a9aa3">[DeepSeek站]</span></h2>'
+  + '<button class="bv" id="fbBtn">加载反馈</button><div id="fl" style="margin-top:10px"></div></div>'
   + '<script>'
   + 'var K="";'
   + 'function lm(t,c){var e=document.getElementById("lm");if(e){e.textContent=t;e.style.color=c||"#ff8ba0";}}'
@@ -215,6 +217,7 @@ function adminPage(env){
   + 'async function delUser(u){if(!confirm("删除 "+u+" 及所有记录？不可恢复！"))return;var r=await fetch("/api/admin/delete-user?key="+encodeURIComponent(K),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({user:u})});var j=await r.json();if(j.ok){doLogin();}else{alert(j.error||"失败");}}'
   + 'document.getElementById("goBtn").onclick=doLogin;'
   + 'document.getElementById("rfBtn").onclick=doLogin;'
+  + 'document.getElementById("fbBtn").onclick=async function(){var j=await api("/api/admin/feedbacks?site="+encodeURIComponent("[DeepSeek站]"));if(!j.ok){alert("失败");return;}var h="";if(!j.feedbacks.length)h="<div class=\\"card\\">暂无反馈</div>";for(var i=0;i<j.feedbacks.length;i++){var f=j.feedbacks[i];h+="<div class=\\"card\\"><div>"+esc(f.text)+"</div><div style=\\"color:#9a9aa3;font-size:12px;margin-top:6px\\">"+fmtT(f.t)+" | "+esc(f.ip||"--")+" "+esc(f.cc||"")+(f.contact?" | "+esc(f.contact):"")+(f.files?" | "+f.files+"个附件":"")+"</div></div>";}document.getElementById("fl").innerHTML=h;};'
   + 'document.getElementById("ki").addEventListener("keydown",function(e){if(e.key==="Enter")doLogin();});'
   + '</scr'+'ipt></body></html>';
   return new Response(h, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
@@ -492,6 +495,31 @@ async function handleFeedbackSubmit(request, env) {
   return json({ ok: true });
 }
 
+async function handleAdminFeedbacks(request, env){
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const kv = env.FEEDBACK_KV;
+  const siteFilter = new URL(request.url).searchParams.get('site') || '';
+  const out = [];
+  try {
+    let cursor = undefined;
+    do {
+      const res = await kv.list({ prefix: 'fb_', cursor });
+      for (const k of res.keys) {
+        try {
+          const raw = await kv.get(k.name);
+          if (!raw) continue;
+          const it = JSON.parse(raw);
+          if (siteFilter && it.site !== siteFilter) continue;
+          out.push({ id: it.id, site: it.site, text: (it.text||'').slice(0,200), contact: it.contact||'', ip: it.ip||'', cc: it.cc||'', t: it.t||0, files: (it.files||[]).length });
+        } catch(e){}
+      }
+      cursor = res.list_complete ? undefined : res.cursor;
+    } while (cursor);
+  } catch(e){}
+  out.sort(function(a,b){ return b.t - a.t; });
+  return json({ ok: true, feedbacks: out.slice(0,100) });
+}
+
 function checkAdminKey(url, env) {
   const key = url.searchParams.get('key') || '';
   const adminKey = (env.FEEDBACK_ADMIN_KEY || '').trim();
@@ -553,6 +581,7 @@ export default {
     if (url.pathname === '/api/admin/user-convs') return handleAdminUserConvs(request, env);
     if (url.pathname === '/api/admin/conv') return handleAdminConvView(request, env);
     if (url.pathname === '/api/admin/delete-user' && request.method === 'POST') return handleAdminDeleteUser(request, env);
+    if (url.pathname === '/api/admin/feedbacks') return handleAdminFeedbacks(request, env);
     if (url.pathname === '/admin') return adminPage(env);
     if (url.pathname === '/api/turnstile-key') {
       return json({ ok: true, siteKey: (env.TURNSTILE_SITE_KEY || '').trim() });
