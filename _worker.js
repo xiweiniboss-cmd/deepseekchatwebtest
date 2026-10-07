@@ -204,8 +204,7 @@ function adminPage(env){
   + '<script>'
   + 'var K="";'
   + 'function lm(t,c){var e=document.getElementById("lm");if(e){e.textContent=t;e.style.color=c||"#ff8ba0";}}'
-  + 'function esc(t){return String(t||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
-function fmtT(t){var d=new Date(t);return d.getFullYear()+"-"+(d.getMonth()+1)+"-"+d.getDate()+" "+d.getHours()+":"+("0"+d.getMinutes()).slice(-2);}'
+  + 'function esc(t){return String(t||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}function fmtT(t){var d=new Date(t);return d.getFullYear()+"-"+(d.getMonth()+1)+"-"+d.getDate()+" "+d.getHours()+":"+("0"+d.getMinutes()).slice(-2);}'
   + 'function api(p){return fetch(p+(p.indexOf("?")>=0?"&":"?")+"key="+encodeURIComponent(K)).then(function(r){return r.text();}).then(function(t){try{return JSON.parse(t);}catch(e){return{ok:false,error:"返回异常:"+t.slice(0,80)};}}).catch(function(e){return{ok:false,error:"网络错误"};});}'
   + 'async function doLogin(){lm("验证中…","#9a9aa3");K=document.getElementById("ki").value.trim();if(!K){lm("请输入密码");return;}var j=await api("/api/admin/users");if(!j.ok){lm(j.error||"密码错误");return;}document.getElementById("kb").className="hd";document.getElementById("mn").className="";showUsers(j.users);}'
   + 'function showUsers(us){var h=\'\';if(!us.length)h=\'<div class="card">暂无用户</div>\';for(var i=0;i<us.length;i++){var u=us[i];h+=\'<div class="card"><div class="row"><div><b>\'+esc(u.username)+\'</b> \'+u.convs+\'个对话<br><span style="color:#9a9aa3;font-size:12px">\'+esc(u.model||\'--\')+\' | \'+esc(u.ip||\'--\')+\'</span><br><span style="color:#9a9aa3;font-size:12px">最后活跃: \'+(u.lastT?fmtT(u.lastT):\'--\')+\'</span></div><div><button class="bv" data-u="\'+esc(u.username)+\'" data-a="v">查看</button> <button class="bd" data-u="\'+esc(u.username)+\'" data-a="d">删除</button></div></div></div>\';}document.getElementById(\'ul\').innerHTML=h;bindBtns(\'ul\');}'
