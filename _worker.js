@@ -624,6 +624,20 @@ async function dedupeBrakeRuns(kv, keys) {
   }
   return keys.filter(function (k) { return dups.indexOf(k) === -1; });
 }
+// 刹车上报限流：单个 IP 每分钟最多 20 局（正常游玩一局至少十几秒，20/分钟只拦刷子）
+// 限流器自身故障时放行，不影响正常游玩
+async function brakeRateLimit(kv, ip) {
+  if (!kv || !ip) return true;
+  try {
+    const bucket = Math.floor(Date.now() / 60000);
+    const key = 'brake_rl_' + bucket + '_' + ip.replace(/[^a-zA-Z0-9.:]/g, '').slice(0, 45);
+    const raw = await kv.get(key);
+    const n = (parseInt(raw || '0', 10) || 0) + 1;
+    if (n > 20) return false;
+    await kv.put(key, String(n), { expirationTtl: 75 });
+    return true;
+  } catch (e) { return true; }
+}
 async function handleBrakeResult(request, env) {
   const kv = env.FEEDBACK_KV;
   if (!kv) return json({ ok: false, error: '未启用' }, 503);
@@ -638,6 +652,9 @@ async function handleBrakeResult(request, env) {
   if (success && !(ms >= 500 && ms <= 30000)) return json({ ok: false, error: '数据异常' }, 400);
   const now = Date.now();
   const ip = request.headers.get('cf-connecting-ip') || '';
+  if (ip && !(await brakeRateLimit(kv, ip))) {
+    return json({ ok: false, error: '手速太快了，歇一会儿再战' }, 429);
+  }
   try {
     await kv.put(brakeRunKey(now, device, success), JSON.stringify({ ip: ip, d: device, n: name, ok: success, ms: success ? ms : 0, r: reaction, t: now }));
   } catch (e) {}
