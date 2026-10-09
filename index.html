@@ -150,7 +150,7 @@ body::after{content:"";position:fixed;inset:0;background:url('/bg.jpg') center/c
     <div id="thinkBox">
       <div id="thinkHead"><span>推理等级</span><span id="effortName">梁子</span></div>
       <input type="range" id="effortSlider" min="0" max="3" step="1" value="2">
-      <div id="effortTicks"><span>关闭</span><span>小梁</span><span>梁子</span><span>梁圣</span></div>
+      <div id="effortTicks"><span>关闭</span><span>小难梁</span><span>梁子</span><span>梁圣</span></div>
     </div>
     <div id="webBox"><span>🌐</span><span id="webSwitch" class="switch"><span class="knob"></span></span></div>
   </div>
@@ -336,7 +336,7 @@ $('input').addEventListener('keydown', function(e){
 $('sendBtn').onclick = function(){ sending ? stopGen() : send(); };
 // 推理等级滑杆：关闭 / 小梁(low) / 梁子(high) / 梁圣(max)，默认梁子
 // 联网搜索：右侧小开关。两者集中在同一控制区。
-var EFFORTS = [{k:'off',n:'关闭'},{k:'low',n:'小梁'},{k:'high',n:'梁子'},{k:'max',n:'梁圣'}];
+var EFFORTS = [{k:'off',n:'关闭'},{k:'low',n:'小难梁'},{k:'high',n:'梁子'},{k:'max',n:'梁圣'}];
 var effortIdx = 2, webOn = false;
 try {
   var se = localStorage.getItem('ds_effort');
