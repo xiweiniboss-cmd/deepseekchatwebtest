@@ -149,8 +149,8 @@ body::after{content:"";position:fixed;inset:0;background:var(--bgimg,url('/bg.jp
 <div id="inputBar">
   <div id="toolRow">
     <div id="thinkBox">
-      <div id="thinkHead"><span>推理等级</span><span id="effortName">梁子</span></div>
-      <input type="range" id="effortSlider" min="0" max="3" step="1" value="2">
+      <div id="thinkHead"><span>推理等级</span><span id="effortName">关闭</span></div>
+      <input type="range" id="effortSlider" min="0" max="3" step="1" value="0">
       <div id="effortTicks"><span>关闭</span><span>小难梁</span><span>梁子</span><span>梁圣</span></div>
     </div>
     <div id="webBox"><span>🌐</span><span id="webSwitch" class="switch"><span class="knob"></span></span></div>
@@ -173,6 +173,7 @@ body::after{content:"";position:fixed;inset:0;background:var(--bgimg,url('/bg.jp
     <ol>
       <li>本站为可乐的DeepSeek站，为防止账号丢失请先注册，用户名和密码需要自行记住，本站无法找回</li>
       <li>如有bug欢迎使用反馈系统反馈</li>
+      <li>更新了推理强度：关闭为默认，小难梁最低、梁子中等、梁圣最高，拖动输入框上方滑杆切换</li>
     </ol>
     <div style="text-align:center;margin:8px 0 4px;"><img src="announcement.gif" alt="公告动图" style="max-width:220px;border-radius:12px;"></div>
     <label class="nrow"><input type="checkbox" id="noticeHide"> 下次不再显示</label>
@@ -346,7 +347,7 @@ function setEffortBg(){
 }
 // 预加载三档背景图，切换不闪
 EFFORT_BGS.forEach(function(b){ if (b) { var im = new Image(); im.src = b; } });
-var effortIdx = 2, webOn = false;
+var effortIdx = 0, webOn = false;
 try {
   var se = localStorage.getItem('ds_effort');
   if (se) { for (var ei = 0; ei < EFFORTS.length; ei++) if (EFFORTS[ei].k === se) effortIdx = ei; }
@@ -800,16 +801,17 @@ async function loadHistory(){
 bindLogin();
 // ---------- 进站公告 ----------
 (function(){
-  var hide = false;
-  try { hide = localStorage.getItem('ds_notice_hide') === '1'; } catch(e){}
-  if (hide) return;
+  var VER = '20261009-3'; // 每次更新公告改这个版本号，所有人都会再看到一次
+  var seen = '';
+  try { seen = localStorage.getItem('ds_notice_ver') || ''; } catch(e){}
+  if (seen === VER) return;
   var w = document.getElementById('noticeWrap');
   if (!w) return;
   w.classList.add('show');
   var ok = document.getElementById('noticeOk');
   if (ok) ok.onclick = function(){
     try {
-      if (document.getElementById('noticeHide').checked) localStorage.setItem('ds_notice_hide', '1');
+      if (document.getElementById('noticeHide').checked) localStorage.setItem('ds_notice_ver', VER);
     } catch(e){}
     w.classList.remove('show');
   };
