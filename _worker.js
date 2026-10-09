@@ -1196,6 +1196,23 @@ export default {
       bh.set('Access-Control-Allow-Origin', '*');
       return new Response(br.body, { status: br.status, headers: bh });
     }
+    if (url.pathname === '/api/brake/diag' && request.method === 'GET') {
+      const kv = env.FEEDBACK_KV;
+      const t = Date.now();
+      const k = 'brake_diag_' + t;
+      let putOk = false, getVal = null, listHas = false;
+      try { await kv.put(k, 'hello'); putOk = true; } catch (e) { putOk = 'ERR:' + (e && e.message); }
+      try { getVal = await kv.get(k); } catch (e) { getVal = 'ERR:' + (e && e.message); }
+      try {
+        const res = await kv.list({ prefix: 'brake_diag_', limit: 10 });
+        listHas = !!(res && res.keys && res.keys.some(function (x) { return x.name === k; }));
+      } catch (e) { listHas = 'ERR:' + (e && e.message); }
+      try { await kv.delete(k); } catch (e) {}
+      const br = json({ putOk: putOk, getVal: getVal, listHas: listHas, t: t });
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
     if (url.pathname === '/api/brake/stats' && request.method === 'GET') {
       const br = await handleBrakeStats(request, env);
       const bh = new Headers(br.headers);
