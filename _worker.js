@@ -632,6 +632,31 @@ async function handleAdminBrakeRuns(request, env) {
   if (!Array.isArray(runs)) runs = [];
   return json({ ok: true, success: stats.s | 0, fail: stats.f | 0, runs: runs.slice(0, 200) });
 }
+async function handleAdminBrakeDeleteEntry(request, env) {
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const kv = env.FEEDBACK_KV;
+  let b = {};
+  try { b = await request.json(); } catch (e) {}
+  const device = String(b.device || '').slice(0, 64);
+  if (!device) return json({ ok: false, error: '缺少设备' }, 400);
+  try {
+    if (kv) {
+      let board = [];
+      try { const raw = await kv.get('brake_board_v1'); if (raw) board = JSON.parse(raw); } catch (e) {}
+      if (Array.isArray(board)) {
+        board = board.filter(function (e) { return e.d !== device; });
+        await kv.put('brake_board_v1', JSON.stringify(board));
+      }
+      let runs = [];
+      try { const raw = await kv.get('brake_runs_v1'); if (raw) runs = JSON.parse(raw); } catch (e) {}
+      if (Array.isArray(runs)) {
+        runs = runs.filter(function (e) { return e.d !== device; });
+        await kv.put('brake_runs_v1', JSON.stringify(runs));
+      }
+    }
+  } catch (e) {}
+  return json({ ok: true });
+}
 async function handleAdminBrakeReset(request, env) {
   if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
   const kv = env.FEEDBACK_KV;
@@ -1121,6 +1146,12 @@ export default {
     }
     if (url.pathname === '/api/admin/brake/runs' && request.method === 'GET') {
       const br = await handleAdminBrakeRuns(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/admin/brake/delete-entry' && request.method === 'POST') {
+      const br = await handleAdminBrakeDeleteEntry(request, env);
       const bh = new Headers(br.headers);
       bh.set('Access-Control-Allow-Origin', '*');
       return new Response(br.body, { status: br.status, headers: bh });
