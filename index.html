@@ -128,7 +128,7 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 #newConvBtn{ margin:10px; background:var(--acc); color:#fff; border:none; border-radius:12px; padding:12px; font-size:15px; cursor:pointer; font-weight:600; }
 #chatTsWrap{ display:flex; justify-content:center; padding:6px 0 2px; min-height:70px; }
 #chatTsWrap .ts-tip{ font-size:12px; color:var(--muted); text-align:center; padding:8px; }
-body::after{content:"";position:fixed;inset:0;background:url('/bg.jpg') center/cover no-repeat;opacity:.25;pointer-events:none;z-index:2147483647}</style>
+body::after{content:"";position:fixed;inset:0;background:var(--bgimg,url('/bg.jpg')) center/cover no-repeat;opacity:.25;pointer-events:none;z-index:2147483647}</style>
 </head>
 <body>
 <header>
@@ -338,6 +338,14 @@ $('sendBtn').onclick = function(){ sending ? stopGen() : send(); };
 // 推理等级滑杆：关闭 / 小梁(low) / 梁子(high) / 梁圣(max)，默认梁子
 // 联网搜索：右侧小开关。两者集中在同一控制区。
 var EFFORTS = [{k:'off',n:'关闭'},{k:'low',n:'小难梁'},{k:'high',n:'梁子'},{k:'max',n:'梁圣'}];
+var EFFORT_BGS = ['', '/bg-low.jpg', '/bg-high.jpg', '/bg-max.jpg'];
+function setEffortBg(){
+  var b = EFFORT_BGS[effortIdx];
+  if (b) document.documentElement.style.setProperty('--bgimg', "url('" + b + "')");
+  else document.documentElement.style.removeProperty('--bgimg');
+}
+// 预加载三档背景图，切换不闪
+EFFORT_BGS.forEach(function(b){ if (b) { var im = new Image(); im.src = b; } });
 var effortIdx = 2, webOn = false;
 try {
   var se = localStorage.getItem('ds_effort');
@@ -355,6 +363,7 @@ function syncThinkUI(){
   for (var i = 0; i < ts.length; i++) ts[i].classList.toggle('on', i === effortIdx);
   $('modelSel').value = effortIdx === 0 ? 'deepseek-v4-flash' : 'deepseek-v4-pro';
   $('webSwitch').classList.toggle('on', webOn);
+  setEffortBg();
 }
 function setEffort(i){
   effortIdx = i;
