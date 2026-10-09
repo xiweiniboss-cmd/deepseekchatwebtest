@@ -59,9 +59,10 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 .act-btn:active{ background:#2a2a34; }
 .hint{ text-align:center; color:var(--muted); font-size:12px; padding:20px; line-height:2; }
 .err{ align-self:center; background:rgba(229,72,77,.12); border:1px solid rgba(229,72,77,.4); color:#ff8ba0; font-size:13px; border-radius:12px; padding:10px 16px; max-width:88%; }
-#fbBtn{ position:fixed; left:18px; bottom:calc(90px + env(safe-area-inset-bottom)); width:52px; height:52px;
+#fbBtn{ position:fixed; top:64px; right:14px; width:52px; height:52px;
         border-radius:50%; border:none; font-size:24px; background:var(--acc);
-        box-shadow:0 4px 14px rgba(77,107,254,.45); cursor:pointer; z-index:60; }
+        box-shadow:0 4px 14px rgba(77,107,254,.45); cursor:pointer; z-index:60;
+        touch-action:none; user-select:none; -webkit-user-select:none; }
 #fbWrap{ display:none; position:fixed; inset:0; z-index:70; }
 #fbWrap.show{ display:block; }
 #fbWrap .backdrop{ position:absolute; inset:0; background:rgba(0,0,0,.65); }
@@ -523,7 +524,47 @@ async function doSend(){
 var fbTsId = null;
 function fbToast(m){ var t=$('fbToast'); t.textContent=m; t.style.display='block'; clearTimeout(t._t); t._t=setTimeout(function(){t.style.display='none'},2200); }
 function fbShowErr(m){ var e=$('fbErr'); e.textContent=m; e.style.display='block'; }
+// 反馈按钮可拖动（松手后记住位置）
+var fbDragMoved = false;
+(function(){
+  var btn = $('fbBtn');
+  try {
+    var p = JSON.parse(localStorage.getItem('ds_fbPos') || 'null');
+    if (p && typeof p.top === 'number' && typeof p.left === 'number') {
+      btn.style.top = p.top + 'px'; btn.style.left = p.left + 'px';
+      btn.style.right = 'auto'; btn.style.bottom = 'auto';
+    }
+  } catch(e){}
+  var sx, sy, ox, oy, dragging = false;
+  btn.addEventListener('pointerdown', function(e){
+    sx = e.clientX; sy = e.clientY;
+    var r = btn.getBoundingClientRect(); ox = r.left; oy = r.top;
+    dragging = false;
+    try { btn.setPointerCapture(e.pointerId); } catch(e2){}
+  });
+  btn.addEventListener('pointermove', function(e){
+    if (sx === undefined) return;
+    var dx = e.clientX - sx, dy = e.clientY - sy;
+    if (!dragging && Math.abs(dx) + Math.abs(dy) > 10) dragging = true;
+    if (!dragging) return;
+    var nl = Math.min(Math.max(0, ox + dx), window.innerWidth - btn.offsetWidth);
+    var nt = Math.min(Math.max(0, oy + dy), window.innerHeight - btn.offsetHeight);
+    btn.style.left = nl + 'px'; btn.style.top = nt + 'px';
+    btn.style.right = 'auto'; btn.style.bottom = 'auto';
+  });
+  function endDrag(){
+    if (dragging) {
+      fbDragMoved = true;
+      var r = btn.getBoundingClientRect();
+      try { localStorage.setItem('ds_fbPos', JSON.stringify({top: Math.round(r.top), left: Math.round(r.left)})); } catch(e){}
+    }
+    sx = undefined; dragging = false;
+  }
+  btn.addEventListener('pointerup', endDrag);
+  btn.addEventListener('pointercancel', function(){ sx = undefined; dragging = false; });
+})();
 $('fbBtn').onclick = function(){
+  if (fbDragMoved) { fbDragMoved = false; return; }
   $('fbWrap').classList.add('show');
   $('fbErr').style.display='none';
   // 加载 Turnstile
