@@ -542,6 +542,52 @@ async function handleChat(request, env) {
 // ---------- 反馈系统（与其他站共用 KV/R2） ----------
 function siteTag(){ return '[DeepSeek站]'; }
 
+// ---------- 刹车站：全网成功/失败统计 + 实时排行榜 ----------
+async function handleBrakeResult(request, env) {
+  const kv = env.FEEDBACK_KV;
+  if (!kv) return json({ ok: false, error: '未启用' }, 503);
+  let b = {};
+  try { b = await request.json(); } catch (e) {}
+  const success = b.success === true;
+  const ms = Math.round(Number(b.ms) || 0);
+  const name = String(b.name || '').slice(0, 12) || '无名车手';
+  const device = String(b.device || '').slice(0, 64) || 'anon';
+  if (success && !(ms >= 500 && ms <= 30000)) return json({ ok: false, error: '数据异常' }, 400);
+  let stats = { s: 0, f: 0 };
+  try { const raw = await kv.get('brake_stats_v1'); if (raw) stats = JSON.parse(raw); } catch (e) {}
+  if (success) stats.s++; else stats.f++;
+  try { await kv.put('brake_stats_v1', JSON.stringify(stats)); } catch (e) {}
+  if (success) {
+    let board = [];
+    try { const raw = await kv.get('brake_board_v1'); if (raw) board = JSON.parse(raw); } catch (e) {}
+    if (!Array.isArray(board)) board = [];
+    const now = Date.now();
+    const ex = board.find(function (e) { return e.d === device; });
+    if (ex) { if (ms < ex.ms) { ex.ms = ms; ex.n = name; ex.t = now; } }
+    else board.push({ n: name, ms: ms, d: device, t: now });
+    board.sort(function (a, b2) { return a.ms - b2.ms; });
+    board = board.slice(0, 50);
+    try { await kv.put('brake_board_v1', JSON.stringify(board)); } catch (e) {}
+  }
+  return json({ ok: true });
+}
+async function handleBrakeStats(request, env) {
+  const kv = env.FEEDBACK_KV;
+  let stats = { s: 0, f: 0 };
+  try { const raw = kv && await kv.get('brake_stats_v1'); if (raw) stats = JSON.parse(raw); } catch (e) {}
+  return json({ ok: true, success: stats.s | 0, fail: stats.f | 0 });
+}
+async function handleBrakeBoard(request, env) {
+  const kv = env.FEEDBACK_KV;
+  let board = [];
+  try { const raw = kv && await kv.get('brake_board_v1'); if (raw) board = JSON.parse(raw); } catch (e) {}
+  if (!Array.isArray(board)) board = [];
+  const out = board.map(function (e) {
+    return { n: String(e.n || '无名车手').slice(0, 12), ms: e.ms | 0, t: e.t | 0, d: String(e.d || '') };
+  });
+  return json({ ok: true, board: out });
+}
+
 async function handleFeedbackSubmit(request, env) {
   const kv = env.FEEDBACK_KV;
   if (!kv) return json({ ok: false, error: '反馈功能暂未启用' }, 503);
@@ -966,6 +1012,32 @@ export default {
       const fh = new Headers(fr.headers);
       fh.set('Access-Control-Allow-Origin', '*');
       return new Response(fr.body, { status: fr.status, headers: fh });
+    }
+    if (url.pathname.startsWith('/api/brake/') && request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Max-Age': '86400',
+      }});
+    }
+    if (url.pathname === '/api/brake/result' && request.method === 'POST') {
+      const br = await handleBrakeResult(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/brake/stats' && request.method === 'GET') {
+      const br = await handleBrakeStats(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/brake/board' && request.method === 'GET') {
+      const br = await handleBrakeBoard(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
     }
     if (url.pathname === '/api/feedback' && request.method === 'GET') return handleFeedbackList(request, env);
     if (url.pathname === '/api/feedback' && request.method === 'DELETE') return handleFeedbackDelete(request, env);
