@@ -568,7 +568,42 @@ function brakeHasSensitive(name) {
   return false;
 }
 
-// ---------- 刹车站：全网成功/失败统计 + 实时排行榜 ----------
+// ---------- 刹车站：全网统计 + 实时排行榜 ----------
+// 存储设计：每局写入独立 key（brake_run_<时间戳>_<随机>_<s|f>_<设备>），append-only。
+// 原因：KV 为最终一致性，旧的"读计数→+1→写回"在快速连玩时会被旧数据覆盖导致丢记录。
+function brakeRunKey(ts, device, success) {
+  const d = String(device || 'anon').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20) || 'anon';
+  const r = Math.random().toString(36).slice(2, 6);
+  return 'brake_run_' + String(ts).padStart(13, '0') + '_' + r + '_' + (success ? 's' : 'f') + '_' + d;
+}
+async function listBrakeRunKeys(kv) {
+  const keys = [];
+  let cursor = undefined;
+  do {
+    const res = await kv.list({ prefix: 'brake_run_', cursor: cursor, limit: 1000 });
+    for (const k of res.keys) keys.push(k.name);
+    cursor = res.list_complete ? undefined : res.cursor;
+  } while (cursor);
+  return keys;
+}
+// 一次性迁移旧格式（brake_runs_v1 数组 / brake_stats_v1 计数器）
+async function migrateBrakeOld(kv) {
+  if (!kv) return;
+  try {
+    const old = await kv.get('brake_runs_v1');
+    if (old) {
+      const arr = JSON.parse(old);
+      if (Array.isArray(arr)) {
+        for (const e of arr) {
+          const t = e.t || Date.now();
+          await kv.put(brakeRunKey(t, e.d, !!e.ok), JSON.stringify({ ip: e.ip || '', d: e.d || '', n: e.n || '无名车手', ok: !!e.ok, ms: e.ms | 0, r: e.r | 0, t: t }));
+        }
+      }
+      await kv.delete('brake_runs_v1');
+      await kv.delete('brake_stats_v1');
+    }
+  } catch (e) {}
+}
 async function handleBrakeResult(request, env) {
   const kv = env.FEEDBACK_KV;
   if (!kv) return json({ ok: false, error: '未启用' }, 503);
@@ -581,24 +616,15 @@ async function handleBrakeResult(request, env) {
   if (brakeHasSensitive(name)) name = '无名车手';
   const device = String(b.device || '').slice(0, 64) || 'anon';
   if (success && !(ms >= 500 && ms <= 30000)) return json({ ok: false, error: '数据异常' }, 400);
-  let stats = { s: 0, f: 0 };
-  try { const raw = await kv.get('brake_stats_v1'); if (raw) stats = JSON.parse(raw); } catch (e) {}
-  if (success) stats.s++; else stats.f++;
-  try { await kv.put('brake_stats_v1', JSON.stringify(stats)); } catch (e) {}
+  const now = Date.now();
+  const ip = request.headers.get('cf-connecting-ip') || '';
   try {
-    let runs = [];
-    const rraw = await kv.get('brake_runs_v1');
-    if (rraw) runs = JSON.parse(rraw);
-    if (!Array.isArray(runs)) runs = [];
-    runs.unshift({ ip: request.headers.get('cf-connecting-ip') || '', d: device, n: name, ok: success, ms: success ? ms : 0, r: reaction, t: Date.now() });
-    runs = runs.slice(0, 200);
-    await kv.put('brake_runs_v1', JSON.stringify(runs));
+    await kv.put(brakeRunKey(now, device, success), JSON.stringify({ ip: ip, d: device, n: name, ok: success, ms: success ? ms : 0, r: reaction, t: now }));
   } catch (e) {}
   if (success) {
     let board = [];
     try { const raw = await kv.get('brake_board_v1'); if (raw) board = JSON.parse(raw); } catch (e) {}
     if (!Array.isArray(board)) board = [];
-    const now = Date.now();
     const ex = board.find(function (e) { return e.d === device; });
     if (ex) { if (ms < ex.ms) { ex.ms = ms; ex.n = name; ex.t = now; } }
     else board.push({ n: name, ms: ms, d: device, t: now });
@@ -608,6 +634,34 @@ async function handleBrakeResult(request, env) {
   }
   return json({ ok: true });
 }
+async function brakeStatsCount(kv) {
+  let s = 0, f = 0;
+  if (!kv) return { s: s, f: f };
+  await migrateBrakeOld(kv);
+  const keys = await listBrakeRunKeys(kv);
+  for (const k of keys) {
+    const seg = k.split('_');
+    if (seg[4] === 's') s++; else if (seg[4] === 'f') f++;
+  }
+  return { s: s, f: f };
+}
+async function handleBrakeStats(request, env) {
+  const kv = env.FEEDBACK_KV;
+  let c = { s: 0, f: 0 };
+  try { c = await brakeStatsCount(kv); } catch (e) {}
+  return json({ ok: true, success: c.s, fail: c.f });
+}
+async function handleBrakeBoard(request, env) {
+  const kv = env.FEEDBACK_KV;
+  let board = [];
+  try { const raw = kv && await kv.get('brake_board_v1'); if (raw) board = JSON.parse(raw); } catch (e) {}
+  if (!Array.isArray(board)) board = [];
+  const out = board.map(function (e) {
+    return { n: String(e.n || '无名车手').slice(0, 12), ms: e.ms | 0, t: e.t | 0, d: String(e.d || '') };
+  });
+  return json({ ok: true, board: out });
+}
+
 // ---------- 刹车站昵称校验（改名时调用） ----------
 async function handleBrakeCheckName(request, env) {
   let b = {};
@@ -622,36 +676,47 @@ async function handleBrakeCheckName(request, env) {
 async function handleAdminBrakeRuns(request, env) {
   if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
   const kv = env.FEEDBACK_KV;
-  let stats = { s: 0, f: 0 }, runs = [];
+  await migrateBrakeOld(kv);
+  let runs = [];
+  let keys = [];
   try {
-    const sraw = kv && await kv.get('brake_stats_v1');
-    if (sraw) stats = JSON.parse(sraw);
-    const rraw = kv && await kv.get('brake_runs_v1');
-    if (rraw) runs = JSON.parse(rraw);
+    if (kv) {
+      keys = await listBrakeRunKeys(kv);
+      keys.sort().reverse();
+      const latest = keys.slice(0, 200);
+      const vals = await Promise.all(latest.map(function (k) { return kv.get(k); }));
+      for (const v of vals) {
+        if (!v) continue;
+        try { runs.push(JSON.parse(v)); } catch (e) {}
+      }
+    }
   } catch (e) {}
-  if (!Array.isArray(runs)) runs = [];
-  return json({ ok: true, success: stats.s | 0, fail: stats.f | 0, runs: runs.slice(0, 200) });
+  let c = { s: 0, f: 0 };
+  try {
+    for (const k of keys) {
+      const seg = k.split('_');
+      if (seg[4] === 's') c.s++; else if (seg[4] === 'f') c.f++;
+    }
+  } catch (e) {}
+  return json({ ok: true, success: c.s, fail: c.f, runs: runs });
 }
 async function handleAdminBrakeDeleteEntry(request, env) {
   if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
   const kv = env.FEEDBACK_KV;
   let b = {};
   try { b = await request.json(); } catch (e) {}
-  const device = String(b.device || '').slice(0, 64);
+  const device = String(b.device || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
   if (!device) return json({ ok: false, error: '缺少设备' }, 400);
   try {
     if (kv) {
+      const keys = await listBrakeRunKeys(kv);
+      const mine = keys.filter(function (k) { return k.endsWith('_' + device); });
+      await Promise.all(mine.map(function (k) { return kv.delete(k); }));
       let board = [];
       try { const raw = await kv.get('brake_board_v1'); if (raw) board = JSON.parse(raw); } catch (e) {}
       if (Array.isArray(board)) {
-        board = board.filter(function (e) { return e.d !== device; });
-        await kv.put('brake_board_v1', JSON.stringify(board));
-      }
-      let runs = [];
-      try { const raw = await kv.get('brake_runs_v1'); if (raw) runs = JSON.parse(raw); } catch (e) {}
-      if (Array.isArray(runs)) {
-        runs = runs.filter(function (e) { return e.d !== device; });
-        await kv.put('brake_runs_v1', JSON.stringify(runs));
+        const nb = board.filter(function (e) { return String(e.d || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20) !== device; });
+        if (nb.length !== board.length) await kv.put('brake_board_v1', JSON.stringify(nb));
       }
     }
   } catch (e) {}
@@ -662,31 +727,15 @@ async function handleAdminBrakeReset(request, env) {
   const kv = env.FEEDBACK_KV;
   try {
     if (kv) {
-      await kv.delete('brake_stats_v1');
+      const keys = await listBrakeRunKeys(kv);
+      await Promise.all(keys.map(function (k) { return kv.delete(k); }));
       await kv.delete('brake_board_v1');
       await kv.delete('brake_runs_v1');
+      await kv.delete('brake_stats_v1');
     }
   } catch (e) {}
   return json({ ok: true });
 }
-
-async function handleBrakeStats(request, env) {
-  const kv = env.FEEDBACK_KV;
-  let stats = { s: 0, f: 0 };
-  try { const raw = kv && await kv.get('brake_stats_v1'); if (raw) stats = JSON.parse(raw); } catch (e) {}
-  return json({ ok: true, success: stats.s | 0, fail: stats.f | 0 });
-}
-async function handleBrakeBoard(request, env) {
-  const kv = env.FEEDBACK_KV;
-  let board = [];
-  try { const raw = kv && await kv.get('brake_board_v1'); if (raw) board = JSON.parse(raw); } catch (e) {}
-  if (!Array.isArray(board)) board = [];
-  const out = board.map(function (e) {
-    return { n: String(e.n || '无名车手').slice(0, 12), ms: e.ms | 0, t: e.t | 0, d: String(e.d || '') };
-  });
-  return json({ ok: true, board: out });
-}
-
 async function handleFeedbackSubmit(request, env) {
   const kv = env.FEEDBACK_KV;
   if (!kv) return json({ ok: false, error: '反馈功能暂未启用' }, 503);
