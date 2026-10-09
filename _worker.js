@@ -587,6 +587,7 @@ async function listBrakeRunKeys(kv) {
   return keys;
 }
 // 一次性迁移旧格式（brake_runs_v1 数组 / brake_stats_v1 计数器）
+// 用确定性 key（_mig<序号>），重复执行只会覆盖，不会产生重复
 async function migrateBrakeOld(kv) {
   if (!kv) return;
   try {
@@ -594,15 +595,34 @@ async function migrateBrakeOld(kv) {
     if (old) {
       const arr = JSON.parse(old);
       if (Array.isArray(arr)) {
+        let i = 0;
         for (const e of arr) {
           const t = e.t || Date.now();
-          await kv.put(brakeRunKey(t, e.d, !!e.ok), JSON.stringify({ ip: e.ip || '', d: e.d || '', n: e.n || '无名车手', ok: !!e.ok, ms: e.ms | 0, r: e.r | 0, t: t }));
+          const d = String(e.d || 'anon').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20) || 'anon';
+          const key = 'brake_run_' + String(t).padStart(13, '0') + '_mig' + (i++) + '_' + (e.ok ? 's' : 'f') + '_' + d;
+          await kv.put(key, JSON.stringify({ ip: e.ip || '', d: e.d || '', n: e.n || '无名车手', ok: !!e.ok, ms: e.ms | 0, r: e.r | 0, t: t }));
         }
       }
       await kv.delete('brake_runs_v1');
       await kv.delete('brake_stats_v1');
     }
   } catch (e) {}
+}
+// 去重：同一毫秒同一设备的重复 key 只保留一个（真实游玩不可能同毫秒提交两次）
+async function dedupeBrakeRuns(kv, keys) {
+  const seen = new Set();
+  const dups = [];
+  for (const k of keys) {
+    const m = /^brake_run_(\d+)_[a-z0-9]+_([sf])_([A-Za-z0-9]+)$/.exec(k);
+    if (!m) continue;
+    const sig = m[1] + '_' + m[3] + '_' + m[4]; // 时间戳_结果_设备（忽略随机段）
+    if (seen.has(sig)) dups.push(k);
+    else seen.add(sig);
+  }
+  if (dups.length) {
+    await Promise.all(dups.map(function (k) { return kv.delete(k); }));
+  }
+  return keys.filter(function (k) { return dups.indexOf(k) === -1; });
 }
 async function handleBrakeResult(request, env) {
   const kv = env.FEEDBACK_KV;
@@ -638,7 +658,8 @@ async function brakeStatsCount(kv) {
   let s = 0, f = 0;
   if (!kv) return { s: s, f: f };
   await migrateBrakeOld(kv);
-  const keys = await listBrakeRunKeys(kv);
+  let keys = await listBrakeRunKeys(kv);
+  try { keys = await dedupeBrakeRuns(kv, keys); } catch (e) {}
   for (const k of keys) {
     const seg = k.split('_');
     if (seg[4] === 's') s++; else if (seg[4] === 'f') f++;
