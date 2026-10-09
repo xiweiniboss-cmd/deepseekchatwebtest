@@ -458,10 +458,16 @@ async function handleChat(request, env) {
   const finalMessages = sysPrompt ? [{ role: 'system', content: sysPrompt }].concat(clean) : clean;
 
   try {
+    const dsBody = { model, messages: finalMessages, stream: true, stream_options: { include_usage: true }, thinking: { type: 'enabled' } };
+    // 推理强度：仅深度思考(Pro)时透传前端选择的档位，默认 high；Flash 保持原有行为
+    if (model === 'deepseek-v4-pro') {
+      const e = body.effort;
+      dsBody.reasoning_effort = (e === 'low' || e === 'max') ? e : 'high';
+    }
     const r = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
-      body: JSON.stringify({ model, messages: finalMessages, stream: true, stream_options: { include_usage: true }, thinking: { type: 'enabled' } }),
+      body: JSON.stringify(dsBody),
     });
     if (!r.ok || !r.body) {
       const t = await r.text().catch(function(){ return ''; });
