@@ -576,6 +576,7 @@ async function handleBrakeResult(request, env) {
   try { b = await request.json(); } catch (e) {}
   const success = b.success === true;
   const ms = Math.round(Number(b.ms) || 0);
+  const reaction = Math.min(Math.max(Math.round(Number(b.reaction) || 0), 0), 30000);
   let name = String(b.name || '').slice(0, 12) || '无名车手';
   if (brakeHasSensitive(name)) name = '无名车手';
   const device = String(b.device || '').slice(0, 64) || 'anon';
@@ -589,7 +590,7 @@ async function handleBrakeResult(request, env) {
     const rraw = await kv.get('brake_runs_v1');
     if (rraw) runs = JSON.parse(rraw);
     if (!Array.isArray(runs)) runs = [];
-    runs.unshift({ ip: request.headers.get('cf-connecting-ip') || '', d: device, n: name, ok: success, ms: success ? ms : 0, t: Date.now() });
+    runs.unshift({ ip: request.headers.get('cf-connecting-ip') || '', d: device, n: name, ok: success, ms: success ? ms : 0, r: reaction, t: Date.now() });
     runs = runs.slice(0, 200);
     await kv.put('brake_runs_v1', JSON.stringify(runs));
   } catch (e) {}
