@@ -44,6 +44,8 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 #effortTicks{ display:flex; justify-content:space-between; font-size:11px; color:var(--muted); padding:0 2px; }
 #effortTicks span.on{ color:var(--acc); font-weight:600; }
 #webBox{ display:flex; align-items:center; gap:8px; background:#1a1a21; border:1px solid #2c2c36; border-radius:14px; padding:8px 12px; font-size:16px; }
+#webBox .webLabel{ font-size:13px; color:var(--muted); white-space:nowrap; }
+#webBox.on .webLabel{ color:var(--acc); font-weight:600; }
 .switch{ width:46px; height:26px; border-radius:14px; background:#2c2c36; position:relative; cursor:pointer; transition:background .2s; flex:none; }
 .switch.on{ background:#4a9eff; }
 .switch .knob{ position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; transition:left .2s; }
@@ -155,7 +157,7 @@ body::after{content:"";position:fixed;inset:0;background:var(--bgimg,url('/bg.jp
       <input type="range" id="effortSlider" min="0" max="3" step="1" value="0">
       <div id="effortTicks"><span>关闭</span><span>小难梁</span><span>梁子</span><span>梁圣</span></div>
     </div>
-    <div id="webBox"><span>🌐</span><span id="webSwitch" class="switch"><span class="knob"></span></span></div>
+    <div id="webBox"><span>🌐</span><span class="webLabel">联网搜索</span><span id="webSwitch" class="switch"><span class="knob"></span></span></div>
   </div>
   <div id="inputWrap">
     <button id="imgBtn" title="上传图片">🖼</button>
@@ -367,6 +369,7 @@ function syncThinkUI(){
   for (var i = 0; i < ts.length; i++) ts[i].classList.toggle('on', i === effortIdx);
   $('modelSel').value = effortIdx === 0 ? 'deepseek-v4-flash' : 'deepseek-v4-pro';
   $('webSwitch').classList.toggle('on', webOn);
+  $('webBox').classList.toggle('on', webOn);
   setEffortBg();
 }
 function setEffort(i){
@@ -379,6 +382,7 @@ $('webSwitch').onclick = function(){
   webOn = !webOn;
   try { localStorage.setItem('ds_web', webOn ? '1' : '0'); } catch(e){}
   $('webSwitch').classList.toggle('on', webOn);
+  $('webBox').classList.toggle('on', webOn);
 };
 syncThinkUI();
 // 图片上传（仅 deepseek-v4-flash 支持看图）
