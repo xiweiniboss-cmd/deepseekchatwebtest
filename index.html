@@ -30,11 +30,23 @@ header .dot{ width:9px; height:9px; border-radius:50%; background:#3ddc84; }
 .cursor::after{ content:"▍"; animation:blink 1s infinite; color:var(--acc); }
 @keyframes blink{ 50%{ opacity:0; } }
 #inputBar{ padding:10px 14px calc(10px + env(safe-area-inset-bottom)); border-top:1px solid #22222b; background:var(--bg); }
-#toolRow{ max-width:760px; margin:0 auto 8px; display:flex; gap:8px; }
-.pill{ border:1px solid #2c2c36; background:#1a1a21; color:var(--muted); border-radius:20px; padding:7px 14px; font-size:13px; cursor:pointer; }
-.pill.on{ border-color:var(--acc); color:var(--acc); background:rgba(74,158,255,.1); }
-.pill.effort{ padding:7px 10px; font-size:12px; }
-#effortWrap.on{ display:flex !important; }
+#toolRow{ max-width:760px; margin:0 auto 8px; display:flex; gap:10px; align-items:stretch; }
+#thinkBox{ flex:1; background:#1a1a21; border:1px solid #2c2c36; border-radius:14px; padding:8px 14px 6px; }
+#thinkHead{ display:flex; justify-content:space-between; align-items:center; font-size:13px; color:var(--muted); margin-bottom:2px; }
+#effortName{ color:var(--acc); font-weight:600; }
+#effortSlider{ -webkit-appearance:none; appearance:none; width:100%; height:26px; background:transparent; margin:0; --trackbg:#2c2c36; }
+#effortSlider::-webkit-slider-runnable-track{ height:12px; border-radius:8px; background:var(--trackbg); }
+#effortSlider::-webkit-slider-thumb{ -webkit-appearance:none; width:24px; height:24px; border-radius:50%; background:#fff; margin-top:-6px; box-shadow:0 2px 6px rgba(0,0,0,.45); cursor:pointer; }
+#effortSlider::-moz-range-track{ height:12px; border-radius:8px; background:#2c2c36; }
+#effortSlider::-moz-range-progress{ height:12px; border-radius:8px; background:linear-gradient(90deg,#6d28d9,#4a9eff); }
+#effortSlider::-moz-range-thumb{ width:22px; height:22px; border:none; border-radius:50%; background:#fff; }
+#effortTicks{ display:flex; justify-content:space-between; font-size:11px; color:var(--muted); padding:0 2px; }
+#effortTicks span.on{ color:var(--acc); font-weight:600; }
+#webBox{ display:flex; align-items:center; gap:8px; background:#1a1a21; border:1px solid #2c2c36; border-radius:14px; padding:8px 12px; font-size:16px; }
+.switch{ width:46px; height:26px; border-radius:14px; background:#2c2c36; position:relative; cursor:pointer; transition:background .2s; flex:none; }
+.switch.on{ background:#4a9eff; }
+.switch .knob{ position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; transition:left .2s; }
+.switch.on .knob{ left:23px; }
 #inputWrap{ max-width:760px; margin:0 auto; display:flex; gap:8px; align-items:flex-end; }
 #input{ flex:1; background:#1a1a21; border:1px solid #2c2c36; border-radius:14px; color:var(--text); font-size:15px; padding:12px 14px; outline:none; resize:none; max-height:120px; font-family:inherit; }
 #input:focus{ border-color:var(--acc); }
@@ -135,8 +147,12 @@ body::after{content:"";position:fixed;inset:0;background:url('/bg.jpg') center/c
 <div id="chatTsWrap"><div id="chatTs"></div></div>
 <div id="inputBar">
   <div id="toolRow">
-    <button class="pill" id="thinkPill">🧠 深度思考</button><span id="effortWrap" style="display:none;align-items:center;gap:4px"><button class="pill effort" data-e="low">低</button><button class="pill effort" data-e="high">高</button><button class="pill effort" data-e="max">最强</button></span>
-    <button class="pill" id="webPill">🌐 联网搜索</button>
+    <div id="thinkBox">
+      <div id="thinkHead"><span>推理等级</span><span id="effortName">梁子</span></div>
+      <input type="range" id="effortSlider" min="0" max="3" step="1" value="2">
+      <div id="effortTicks"><span>关闭</span><span>小梁</span><span>梁子</span><span>梁圣</span></div>
+    </div>
+    <div id="webBox"><span>🌐</span><span id="webSwitch" class="switch"><span class="knob"></span></span></div>
   </div>
   <div id="inputWrap">
     <button id="imgBtn" title="上传图片">🖼</button>
@@ -318,48 +334,39 @@ $('input').addEventListener('keydown', function(e){
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
 $('sendBtn').onclick = function(){ sending ? stopGen() : send(); };
-// 深度思考 / 联网搜索开关
-var thinkOn = false, webOn = false;
+// 推理等级滑杆：关闭 / 小梁(low) / 梁子(high) / 梁圣(max)，默认梁子
+// 联网搜索：右侧小开关。两者集中在同一控制区。
+var EFFORTS = [{k:'off',n:'关闭'},{k:'low',n:'小梁'},{k:'high',n:'梁子'},{k:'max',n:'梁圣'}];
+var effortIdx = 2, webOn = false;
 try {
-  thinkOn = localStorage.getItem('ds_think') === '1';
+  var se = localStorage.getItem('ds_effort');
+  if (se) { for (var ei = 0; ei < EFFORTS.length; ei++) if (EFFORTS[ei].k === se) effortIdx = ei; }
+  else if (localStorage.getItem('ds_think') === '0') { effortIdx = 0; }
   webOn = localStorage.getItem('ds_web') === '1';
 } catch(e){}
-function syncPills(){
-  $('thinkPill').classList.toggle('on', thinkOn);
-  $('webPill').classList.toggle('on', webOn);
-  $('modelSel').value = thinkOn ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
-  syncEffort();
+function syncThinkUI(){
+  var s = $('effortSlider');
+  s.value = effortIdx;
+  $('effortName').textContent = EFFORTS[effortIdx].n;
+  var p = (effortIdx / 3 * 100);
+  s.style.setProperty('--trackbg', 'linear-gradient(90deg,#6d28d9 0%,#4a9eff ' + p + '%,#2c2c36 ' + p + '%)');
+  var ts = document.querySelectorAll('#effortTicks span');
+  for (var i = 0; i < ts.length; i++) ts[i].classList.toggle('on', i === effortIdx);
+  $('modelSel').value = effortIdx === 0 ? 'deepseek-v4-flash' : 'deepseek-v4-pro';
+  $('webSwitch').classList.toggle('on', webOn);
 }
-$('thinkPill').onclick = function(){
-  thinkOn = !thinkOn;
-  try { localStorage.setItem('ds_think', thinkOn ? '1' : '0'); } catch(e){}
-  syncPills();
-};
-$('webPill').onclick = function(){
+function setEffort(i){
+  effortIdx = i;
+  try { localStorage.setItem('ds_effort', EFFORTS[i].k); } catch(e){}
+  syncThinkUI();
+}
+$('effortSlider').oninput = function(){ setEffort(parseInt(this.value, 10)); };
+$('webSwitch').onclick = function(){
   webOn = !webOn;
   try { localStorage.setItem('ds_web', webOn ? '1' : '0'); } catch(e){}
-  syncPills();
+  $('webSwitch').classList.toggle('on', webOn);
 };
-// 推理强度：仅深度思考(Pro)时有效，默认 high，存 localStorage
-var effort = 'high';
-try { effort = localStorage.getItem('ds_effort') || 'high'; } catch(e){}
-if (['low','high','max'].indexOf(effort) < 0) effort = 'high';
-function syncEffort(){
-  $('effortWrap').classList.toggle('on', thinkOn);
-  var bs = document.querySelectorAll('#effortWrap .pill');
-  for (var i = 0; i < bs.length; i++) bs[i].classList.toggle('on', bs[i].getAttribute('data-e') === effort);
-}
-(function(){
-  var bs = document.querySelectorAll('#effortWrap .pill');
-  for (var i = 0; i < bs.length; i++) {
-    bs[i].onclick = function(){
-      effort = this.getAttribute('data-e');
-      try { localStorage.setItem('ds_effort', effort); } catch(e){}
-      syncEffort();
-    };
-  }
-})();
-syncPills();
+syncThinkUI();
 // 图片上传（仅 deepseek-v4-flash 支持看图）
 var pendingImage = null; // dataURL
 $('imgBtn').onclick = function(){ $('imgInput').click(); };
@@ -387,14 +394,11 @@ $('imgInput').onchange = function(){
   };
   rd.readAsDataURL(f);
 };
-// 切换到 Pro 时若有待发送图片，提示
+// 顶部模型下拉框反向同步到滑杆：flash→关闭，pro→梁子
 $('modelSel').onchange = function(){
-  thinkOn = (this.value === 'deepseek-v4-pro');
-  try { localStorage.setItem('ds_think', thinkOn ? '1' : '0'); } catch(e){}
-  $('thinkPill').classList.toggle('on', thinkOn);
-  syncEffort();
+  setEffort(this.value === 'deepseek-v4-pro' ? 2 : 0);
   if (this.value === 'deepseek-v4-pro' && pendingImage) {
-    alert('V4 Pro 不支持看图，已为你切回的图片将被忽略（可换回 Flash）');
+    alert('Pro 模型不支持看图，图片将被忽略（把推理等级拖到"关闭"可看图）');
   }
 };
 function stopGen(){
@@ -442,12 +446,12 @@ async function doSend(){
   try {
     var tsToken = '';
     try { if (chatTsId !== null && window.turnstile) tsToken = turnstile.getResponse(chatTsId); } catch(e){}
-    if (thinkOn) curThink = true;
+    if (effortIdx > 0) curThink = EFFORTS[effortIdx].n;
     if (webOn) curWeb = true;
     var resp = await fetch('/api/chat', {
       method:'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ model: $('modelSel').value, messages: messages, turnstile: tsToken, websearch: webOn, effort: effort }),
+      body: JSON.stringify({ model: $('modelSel').value, messages: messages, turnstile: tsToken, websearch: webOn, effort: EFFORTS[effortIdx].k }),
       signal: aborter.signal,
     });
     if (!resp.ok) {
@@ -653,7 +657,7 @@ function bindLogin(){
 }
 var saveTimer=null;
 var curConvId=null, convListCache=[];
-var curThink=false, curWeb=false; // 当前对话是否用过深度思考/联网
+var curThink='', curWeb=false; // 当前对话用过的推理等级（''/小梁/梁子/梁圣）/联网
 function saveHistory(){
   if(!authToken) return;
   clearTimeout(saveTimer);
@@ -696,7 +700,7 @@ async function openConv(id){
     curConvId=id;
     messages=Array.isArray(j.messages)?j.messages:[];
     var ce=convListCache.find(function(x){return x.id===id;});
-    curThink=!!(ce&&ce.think); curWeb=!!(ce&&ce.web);
+    curThink=(ce&&ce.think)||''; curWeb=!!(ce&&ce.web);
     renderMessages();
   }catch(e){}
 }
@@ -705,13 +709,13 @@ async function delConv(id){
   try{
     await fetch('/api/conv?id='+encodeURIComponent(id),{method:'DELETE',headers:authHeaders()});
     convListCache=convListCache.filter(function(c){return c.id!==id;});
-    if(curConvId===id){ curConvId=null; messages=[]; curThink=false; curWeb=false; renderMessages(); }
+    if(curConvId===id){ curConvId=null; messages=[]; curThink=''; curWeb=false; renderMessages(); }
     renderHistList();
   }catch(e){}
 }
 function newConversation(){
   closeHist();
-  curConvId=null; messages=[]; curThink=false; curWeb=false;
+  curConvId=null; messages=[]; curThink=''; curWeb=false;
   document.getElementById('chat').innerHTML='<div class="hint">👋 新对话开始<br>直接输入问题开始聊天</div>';
 }
 function renderMessages(){
