@@ -734,6 +734,18 @@ async function handleBrakeStats(request, env) {
   try { c = await brakeStatsCount(kv); } catch (e) {}
   return json({ ok: true, success: c.s, fail: c.f });
 }
+// KV 写健康检查：cron 用来判断配额是否烧完（读不受影响，只测写）
+async function handleKvHealth(request, env) {
+  const kv = env.FEEDBACK_KV;
+  let write = false;
+  try {
+    if (kv) {
+      await kv.put('__kv_health__', String(Date.now()), { expirationTtl: 60 });
+      write = true;
+    }
+  } catch (e) { write = false; }
+  return json({ ok: true, write: write });
+}
 async function handleBrakeBoard(request, env) {
   const kv = env.FEEDBACK_KV;
   let board = [];
@@ -1271,6 +1283,9 @@ export default {
       const bh = new Headers(br.headers);
       bh.set('Access-Control-Allow-Origin', '*');
       return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/kv-health' && request.method === 'GET') {
+      return handleKvHealth(request, env);
     }
     if (url.pathname === '/api/brake/board' && request.method === 'GET') {
       const br = await handleBrakeBoard(request, env);
