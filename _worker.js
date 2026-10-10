@@ -852,6 +852,45 @@ async function handleTp0kScore(request, env) {
   return json({ score: score, best: newBest, rank: rank });
 }
 
+// ---------- tp0k 排行榜后台管理 ----------
+async function handleAdminTp0kBoard(request, env) {
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const kv = env.FEEDBACK_KV;
+  let board = [];
+  try { board = await tp0kBoardGet(kv, 1000); } catch (e) {}
+  const out = board.map(function (e) {
+    return { n: String(e.n || '无名车手').slice(0, 12), d: String(e.d || ''), v0: +e.v0 || 0, t: +e.t || 0, s: e.s | 0, ts: e.ts | 0 };
+  });
+  return json({ ok: true, count: out.length, board: out });
+}
+async function handleAdminTp0kDeleteEntry(request, env) {
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const kv = env.FEEDBACK_KV;
+  let b = {};
+  try { b = await request.json(); } catch (e) {}
+  const device = String(b.device || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
+  if (!device) return json({ ok: false, error: '缺少设备' }, 400);
+  try { if (kv) await kv.delete(tp0kBestKey(device)); } catch (e) {}
+  return json({ ok: true });
+}
+async function handleAdminTp0kReset(request, env) {
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const kv = env.FEEDBACK_KV;
+  try {
+    if (kv) {
+      let cursor = undefined;
+      do {
+        const res = await kv.list({ prefix: 'tp0k_best_', cursor: cursor, limit: 1000 });
+        if (res && res.keys) {
+          await Promise.all(res.keys.map(function (k) { return kv.delete(k.name); }));
+        }
+        cursor = res && !res.list_complete ? res.cursor : undefined;
+      } while (cursor);
+    }
+  } catch (e) {}
+  return json({ ok: true });
+}
+
 // ---------- 刹车站后台管理 ----------
 async function handleAdminBrakeRuns(request, env) {
   if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
@@ -1395,6 +1434,24 @@ export default {
     }
     if (url.pathname === '/api/score' && request.method === 'POST') {
       const br = await handleTp0kScore(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/admin/tp0k/board' && request.method === 'GET') {
+      const br = await handleAdminTp0kBoard(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/admin/tp0k/delete-entry' && request.method === 'POST') {
+      const br = await handleAdminTp0kDeleteEntry(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/admin/tp0k/reset' && request.method === 'POST') {
+      const br = await handleAdminTp0kReset(request, env);
       const bh = new Headers(br.headers);
       bh.set('Access-Control-Allow-Origin', '*');
       return new Response(br.body, { status: br.status, headers: bh });
