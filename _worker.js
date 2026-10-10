@@ -734,6 +734,54 @@ async function handleBrakeStats(request, env) {
   try { c = await brakeStatsCount(kv); } catch (e) {}
   return json({ ok: true, success: c.s, fail: c.f });
 }
+// 临时诊断：比对有成功记录的设备 vs 榜单设备，?fix=1 时补写缺失
+async function handleBrakeDiagBoard(request, env) {
+  const kv = env.FEEDBACK_KV;
+  const report = { successDevices: 0, boardDevices: 0, missing: [], repaired: 0 };
+  try {
+    const best = {};
+    let cursor = undefined;
+    do {
+      const res = await kv.list({ prefix: 'brake_run_', cursor: cursor, limit: 1000 });
+      if (res && res.keys) {
+        const sKeys = res.keys.filter(function (k) { return k.name.indexOf('_1_') >= 0; });
+        const vals = await Promise.all(sKeys.map(function (k) { return kv.get(k.name); }));
+        for (let i = 0; i < sKeys.length; i++) {
+          try {
+            const e = JSON.parse(vals[i]);
+            if (e && e.d && e.ok) {
+              const d = String(e.d).replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
+              const ms = e.ms | 0;
+              if (d && ms > 0 && (!best[d] || ms < best[d].ms)) best[d] = { ms: ms, n: e.n || '无名车手', t: e.t | 0, draw: d };
+            }
+          } catch (e2) {}
+        }
+      }
+      cursor = res && !res.list_complete ? res.cursor : undefined;
+    } while (cursor);
+    const onBoard = {};
+    let c2 = undefined;
+    do {
+      const r2 = await kv.list({ prefix: 'brake_best_', cursor: c2, limit: 1000 });
+      if (r2 && r2.keys) for (const k of r2.keys) onBoard[k.name.slice(11)] = 1;
+      c2 = r2 && !r2.list_complete ? r2.cursor : undefined;
+    } while (c2);
+    report.successDevices = Object.keys(best).length;
+    report.boardDevices = Object.keys(onBoard).length;
+    const url = new URL(request.url);
+    const fix = url.searchParams.get('fix') === '1';
+    for (const d of Object.keys(best)) {
+      if (!onBoard[d]) {
+        report.missing.push({ d: d, ms: best[d].ms, n: best[d].n });
+        if (fix) {
+          await kv.put('brake_best_' + d, JSON.stringify({ n: best[d].n, d: best[d].draw, ms: best[d].ms, t: best[d].t }));
+          report.repaired++;
+        }
+      }
+    }
+  } catch (e) { report.error = String(e); }
+  return json({ ok: true, report: report });
+}
 async function handleBrakeBoard(request, env) {
   const kv = env.FEEDBACK_KV;
   let board = [];
@@ -1271,6 +1319,9 @@ export default {
       const bh = new Headers(br.headers);
       bh.set('Access-Control-Allow-Origin', '*');
       return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/brake/diag-board' && request.method === 'GET') {
+      return handleBrakeDiagBoard(request, env);
     }
     if (url.pathname === '/api/brake/board' && request.method === 'GET') {
       const br = await handleBrakeBoard(request, env);
