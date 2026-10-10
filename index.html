@@ -178,6 +178,7 @@ body::after{content:"";position:fixed;inset:0;background:var(--bgimg,url('/bg.jp
       <li>本站为可乐的DeepSeek站，为防止账号丢失请先注册，用户名和密码需要自行记住，本站无法找回</li>
       <li>如有bug欢迎使用反馈系统反馈</li>
       <li>更新了推理强度：关闭为默认，小难梁最低、梁子中等、梁圣最高，拖动输入框上方滑杆切换</li>
+      <li id="kv-quota-notice">因 Cloudflare 免费额度限制，新对话、登录信息暂时无法同步到服务器，所有反馈暂时无法收到，将于明日早上 8 点自动恢复，尽请谅解</li>
     </ol>
     <div style="text-align:center;margin:8px 0 4px;"><img src="announcement.gif" alt="公告动图" style="max-width:220px;border-radius:12px;"></div>
     <label class="nrow"><input type="checkbox" id="noticeHide"> 下次不再显示</label>
@@ -807,7 +808,7 @@ async function loadHistory(){
 }
 bindLogin();
 // ---------- 进站公告 ----------
-var NOTICE_VER = '20261009-3'; // 每次更新公告改这个版本号，所有人都会再看到一次
+var NOTICE_VER = '20261010-1'; // 每次更新公告改这个版本号，所有人都会再看到一次
 function openNotice(){ var w = document.getElementById('noticeWrap'); if (w) w.classList.add('show'); }
 (function(){
   var seen = '';
