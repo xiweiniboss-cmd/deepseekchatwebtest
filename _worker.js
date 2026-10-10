@@ -1418,13 +1418,31 @@ export default {
       bh.set('Access-Control-Allow-Origin', '*');
       return new Response(br.body, { status: br.status, headers: bh });
     }
-    if ((url.pathname === '/api/leaderboard' || url.pathname === '/api/score') && request.method === 'OPTIONS') {
+    if ((url.pathname === '/api/leaderboard' || url.pathname === '/api/score' || url.pathname === '/api/check-nickname') && request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type',
         'Access-Control-Max-Age': '86400',
       }});
+    }
+    if (url.pathname === '/api/check-nickname' && request.method === 'POST') {
+      let b = {};
+      try { b = await request.json(); } catch (e) {}
+      const nickname = String(b.nickname || '').trim().slice(0, 12);
+      if (!nickname) {
+        const br = json({ ok: false, error: '请先输入昵称' }, 400);
+        const bh = new Headers(br.headers); bh.set('Access-Control-Allow-Origin', '*');
+        return new Response(br.body, { status: br.status, headers: bh });
+      }
+      if (brakeHasSensitive(nickname)) {
+        const br = json({ ok: false, error: '昵称包含敏感词，换一个吧' }, 400);
+        const bh = new Headers(br.headers); bh.set('Access-Control-Allow-Origin', '*');
+        return new Response(br.body, { status: br.status, headers: bh });
+      }
+      const br = json({ ok: true });
+      const bh = new Headers(br.headers); bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
     }
     if (url.pathname === '/api/leaderboard' && request.method === 'GET') {
       const br = await handleTp0kLeaderboard(request, env);
