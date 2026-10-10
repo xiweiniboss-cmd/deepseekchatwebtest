@@ -766,6 +766,90 @@ async function handleBrakeCheckName(request, env) {
   return json({ ok: true, name: name });
 }
 
+// ---------- tp0k 新版刹车游戏排行榜 ----------
+// 每设备独立 key（tp0k_best_<device>），只保留最高分；得分 = v0^2 / 用时
+function tp0kBestKey(device) {
+  return 'tp0k_best_' + String(device || 'anon').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
+}
+async function tp0kBoardSet(kv, device, name, v0, stopTime, score, ts) {
+  if (!kv || !device) return false;
+  try {
+    const key = tp0kBestKey(device);
+    const raw = await kv.get(key);
+    if (raw) {
+      try { const ex = JSON.parse(raw); if (ex && typeof ex.s === 'number' && ex.s >= score) return false; } catch (e2) {}
+    }
+    await kv.put(key, JSON.stringify({ n: name, d: device, v0: v0, t: stopTime, s: score, ts: ts }));
+    return true;
+  } catch (e) { return false; }
+}
+async function tp0kBoardGet(kv, limit) {
+  const board = [];
+  if (!kv) return board;
+  try {
+    let cursor = undefined;
+    do {
+      const res = await kv.list({ prefix: 'tp0k_best_', cursor: cursor, limit: 1000 });
+      if (res && res.keys) {
+        const vals = await Promise.all(res.keys.map(function (k) { return kv.get(k.name); }));
+        for (const v of vals) {
+          try { const e = JSON.parse(v); if (e && typeof e.s === 'number') board.push(e); } catch (e2) {}
+        }
+      }
+      cursor = res && !res.list_complete ? res.cursor : undefined;
+    } while (cursor);
+  } catch (e) {}
+  board.sort(function (a, b) { return b.s - a.s; });
+  return board.slice(0, limit || 50);
+}
+async function handleTp0kLeaderboard(request, env) {
+  const kv = env.FEEDBACK_KV;
+  const url = new URL(request.url);
+  const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 1), 100);
+  let board = [];
+  try { board = await tp0kBoardGet(kv, limit); } catch (e) {}
+  const entries = board.map(function (e) {
+    return { nickname: String(e.n || '无名车手').slice(0, 12), v0: +e.v0 || 0, stopTime: +e.t || 0, score: e.s | 0 };
+  });
+  return json({ entries: entries });
+}
+async function handleTp0kScore(request, env) {
+  const kv = env.FEEDBACK_KV;
+  if (!kv) return json({ error: '未启用' }, 503);
+  let b = {};
+  try { b = await request.json(); } catch (e) {}
+  const nickname = String(b.nickname || '').trim().slice(0, 12);
+  const v0 = Number(b.v0);
+  const stopTime = Number(b.stopTime);
+  const device = String(b.device || '').slice(0, 64) || 'anon';
+  if (!nickname) return json({ error: '请先输入昵称' }, 400);
+  if (brakeHasSensitive(nickname)) return json({ error: '昵称包含敏感词，换一个吧' }, 400);
+  if (!(v0 > 0 && v0 <= 500)) return json({ error: '数据异常' }, 400);
+  if (!(stopTime > 0 && stopTime <= 300)) return json({ error: '数据异常' }, 400);
+  const score = Math.round(v0 * v0 / stopTime);
+  if (!(score > 0 && score <= 2500000)) return json({ error: '数据异常' }, 400);
+  const ip = request.headers.get('cf-connecting-ip') || '';
+  if (ip && !(await brakeRateLimit(kv, ip))) {
+    return json({ error: '手速太快了，歇一会儿再战' }, 429);
+  }
+  const now = Date.now();
+  let best = 0;
+  try {
+    const raw = await kv.get(tp0kBestKey(device));
+    if (raw) { try { const ex = JSON.parse(raw); if (ex && typeof ex.s === 'number') best = ex.s; } catch (e2) {} }
+  } catch (e) {}
+  const newBest = Math.max(best, score);
+  if (score > best) {
+    try { await tp0kBoardSet(kv, device, nickname, v0, stopTime, score, now); } catch (e) {}
+  }
+  let rank = 1;
+  try {
+    const board = await tp0kBoardGet(kv, 1000);
+    for (const e of board) { if (e.s > score) rank++; else break; }
+  } catch (e) {}
+  return json({ score: score, best: newBest, rank: rank });
+}
+
 // ---------- 刹车站后台管理 ----------
 async function handleAdminBrakeRuns(request, env) {
   if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
@@ -1289,6 +1373,26 @@ export default {
     }
     if (url.pathname === '/api/brake/board' && request.method === 'GET') {
       const br = await handleBrakeBoard(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if ((url.pathname === '/api/leaderboard' || url.pathname === '/api/score') && request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Max-Age': '86400',
+      }});
+    }
+    if (url.pathname === '/api/leaderboard' && request.method === 'GET') {
+      const br = await handleTp0kLeaderboard(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/score' && request.method === 'POST') {
+      const br = await handleTp0kScore(request, env);
       const bh = new Headers(br.headers);
       bh.set('Access-Control-Allow-Origin', '*');
       return new Response(br.body, { status: br.status, headers: bh });
