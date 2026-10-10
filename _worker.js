@@ -744,7 +744,7 @@ async function handleBrakeDiagBoard(request, env) {
     do {
       const res = await kv.list({ prefix: 'brake_run_', cursor: cursor, limit: 1000 });
       if (res && res.keys) {
-        const sKeys = res.keys.filter(function (k) { return k.name.indexOf('_1_') >= 0; });
+        const sKeys = res.keys.filter(function (k) { return k.name.split('_')[4] === 's'; });
         const vals = await Promise.all(sKeys.map(function (k) { return kv.get(k.name); }));
         for (let i = 0; i < sKeys.length; i++) {
           try {
