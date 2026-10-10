@@ -638,6 +638,61 @@ async function brakeRateLimit(kv, ip) {
     return true;
   } catch (e) { return true; }
 }
+// 排行榜：每设备独立 key（brake_best_<device>），只保留最快成绩
+// 好处：不同设备写不同 key，彻底消除旧 brake_board_v1 的读-改-写竞争
+function brakeBestKey(device) {
+  return 'brake_best_' + String(device || 'anon').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
+}
+async function brakeBoardSet(kv, device, name, ms, ts) {
+  if (!kv || !device) return;
+  try {
+    const key = brakeBestKey(device);
+    const raw = await kv.get(key);
+    if (raw) {
+      try { const ex = JSON.parse(raw); if (ex && ex.ms && ex.ms <= ms) return; } catch (e2) {}
+    }
+    await kv.put(key, JSON.stringify({ n: name, d: device, ms: ms, t: ts }));
+  } catch (e) {}
+}
+async function brakeBoardGet(kv) {
+  const board = [];
+  if (!kv) return board;
+  // 一次性迁移旧 board
+  try {
+    const legacy = await kv.get('brake_board_v1');
+    if (legacy) {
+      const arr = JSON.parse(legacy);
+      if (Array.isArray(arr)) {
+        for (const e of arr) {
+          if (e && e.d && e.ms) {
+            const key = brakeBestKey(e.d);
+            const exRaw = await kv.get(key);
+            let keep = true;
+            if (exRaw) { try { const ex = JSON.parse(exRaw); if (ex && ex.ms && ex.ms <= e.ms) keep = false; } catch (e2) {} }
+            if (keep) await kv.put(key, JSON.stringify({ n: e.n, d: e.d, ms: e.ms, t: e.t }));
+          }
+        }
+      }
+      await kv.delete('brake_board_v1');
+    }
+  } catch (e) {}
+  // 列出所有 per-device 最佳
+  try {
+    let cursor = undefined;
+    do {
+      const res = await kv.list({ prefix: 'brake_best_', cursor: cursor, limit: 1000 });
+      if (res && res.keys) {
+        const vals = await Promise.all(res.keys.map(function (k) { return kv.get(k.name); }));
+        for (const v of vals) {
+          try { const e = JSON.parse(v); if (e && e.ms) board.push(e); } catch (e2) {}
+        }
+      }
+      cursor = res && !res.list_complete ? res.cursor : undefined;
+    } while (cursor);
+  } catch (e) {}
+  board.sort(function (a, b) { return a.ms - b.ms; });
+  return board.slice(0, 50);
+}
 async function handleBrakeResult(request, env) {
   const kv = env.FEEDBACK_KV;
   if (!kv) return json({ ok: false, error: '未启用' }, 503);
@@ -658,17 +713,7 @@ async function handleBrakeResult(request, env) {
   try {
     await kv.put(brakeRunKey(now, device, success), JSON.stringify({ ip: ip, d: device, n: name, ok: success, ms: success ? ms : 0, r: reaction, t: now }));
   } catch (e) {}
-  if (success) {
-    let board = [];
-    try { const raw = await kv.get('brake_board_v1'); if (raw) board = JSON.parse(raw); } catch (e) {}
-    if (!Array.isArray(board)) board = [];
-    const ex = board.find(function (e) { return e.d === device; });
-    if (ex) { if (ms < ex.ms) { ex.ms = ms; ex.n = name; ex.t = now; } }
-    else board.push({ n: name, ms: ms, d: device, t: now });
-    board.sort(function (a, b2) { return a.ms - b2.ms; });
-    board = board.slice(0, 50);
-    try { await kv.put('brake_board_v1', JSON.stringify(board)); } catch (e) {}
-  }
+  if (success) await brakeBoardSet(kv, device, name, ms, now);
   return json({ ok: true });
 }
 async function brakeStatsCount(kv) {
@@ -692,8 +737,7 @@ async function handleBrakeStats(request, env) {
 async function handleBrakeBoard(request, env) {
   const kv = env.FEEDBACK_KV;
   let board = [];
-  try { const raw = kv && await kv.get('brake_board_v1'); if (raw) board = JSON.parse(raw); } catch (e) {}
-  if (!Array.isArray(board)) board = [];
+  try { board = await brakeBoardGet(kv); } catch (e) {}
   const out = board.map(function (e) {
     return { n: String(e.n || '无名车手').slice(0, 12), ms: e.ms | 0, t: e.t | 0, d: String(e.d || '') };
   });
@@ -750,12 +794,7 @@ async function handleAdminBrakeDeleteEntry(request, env) {
       const keys = await listBrakeRunKeys(kv);
       const mine = keys.filter(function (k) { return k.endsWith('_' + device); });
       await Promise.all(mine.map(function (k) { return kv.delete(k); }));
-      let board = [];
-      try { const raw = await kv.get('brake_board_v1'); if (raw) board = JSON.parse(raw); } catch (e) {}
-      if (Array.isArray(board)) {
-        const nb = board.filter(function (e) { return String(e.d || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20) !== device; });
-        if (nb.length !== board.length) await kv.put('brake_board_v1', JSON.stringify(nb));
-      }
+      try { await kv.delete(brakeBestKey(device)); } catch (e2) {}
     }
   } catch (e) {}
   return json({ ok: true });
@@ -767,6 +806,14 @@ async function handleAdminBrakeReset(request, env) {
     if (kv) {
       const keys = await listBrakeRunKeys(kv);
       await Promise.all(keys.map(function (k) { return kv.delete(k); }));
+      try {
+        let c2 = undefined;
+        do {
+          const r2 = await kv.list({ prefix: 'brake_best_', cursor: c2, limit: 1000 });
+          if (r2 && r2.keys) await Promise.all(r2.keys.map(function (k) { return kv.delete(k.name); }));
+          c2 = r2 && !r2.list_complete ? r2.cursor : undefined;
+        } while (c2);
+      } catch (e2) {}
       await kv.delete('brake_board_v1');
       await kv.delete('brake_runs_v1');
       await kv.delete('brake_stats_v1');
