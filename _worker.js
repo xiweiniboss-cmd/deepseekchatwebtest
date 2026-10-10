@@ -840,7 +840,9 @@ async function handleTp0kScore(request, env) {
   } catch (e) {}
   const newBest = Math.max(best, score);
   if (score > best) {
-    try { await tp0kBoardSet(kv, device, nickname, v0, stopTime, score, now); } catch (e) {}
+    let ok = false;
+    try { ok = await tp0kBoardSet(kv, device, nickname, v0, stopTime, score, now); } catch (e) {}
+    if (!ok) return json({ error: '暂时无法同步服务器，成绩未能保存，请稍后再试' }, 503);
   }
   let rank = 1;
   try {
