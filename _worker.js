@@ -778,7 +778,7 @@ async function handleBrakeCheckName(request, env) {
 function tp0kBestKey(device) {
   return 'tp0k_best_' + String(device || 'anon').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
 }
-async function tp0kBoardSet(kv, device, name, v0, stopTime, score, ts) {
+async function tp0kBoardSet(kv, device, name, v0, stopTime, score, ts, ip) {
   if (!kv || !device) return false;
   try {
     const key = tp0kBestKey(device);
@@ -786,7 +786,7 @@ async function tp0kBoardSet(kv, device, name, v0, stopTime, score, ts) {
     if (raw) {
       try { const ex = JSON.parse(raw); if (ex && typeof ex.s === 'number' && ex.s >= score) return false; } catch (e2) {}
     }
-    await kv.put(key, JSON.stringify({ n: name, d: device, v0: v0, t: stopTime, s: score, ts: ts }));
+    await kv.put(key, JSON.stringify({ n: name, d: device, v0: v0, t: stopTime, s: score, ts: ts, ip: ip || '' }));
     return true;
   } catch (e) { return false; }
 }
@@ -848,7 +848,7 @@ async function handleTp0kScore(request, env) {
   const newBest = Math.max(best, score);
   if (score > best) {
     let ok = false;
-    try { ok = await tp0kBoardSet(kv, device, nickname, v0, stopTime, score, now); } catch (e) {}
+    try { ok = await tp0kBoardSet(kv, device, nickname, v0, stopTime, score, now, ip); } catch (e) {}
     if (!ok) return json({ error: '暂时无法同步服务器，成绩未能保存，请稍后再试' }, 503);
   }
   let rank = 1;
@@ -866,7 +866,7 @@ async function handleAdminTp0kBoard(request, env) {
   let board = [];
   try { board = await tp0kBoardGet(kv, 1000); } catch (e) {}
   const out = board.map(function (e) {
-    return { n: String(e.n || '无名车手').slice(0, 12), d: String(e.d || ''), v0: +e.v0 || 0, t: +e.t || 0, s: e.s | 0, ts: +e.ts || 0 };
+    return { n: String(e.n || '无名车手').slice(0, 12), d: String(e.d || ''), v0: +e.v0 || 0, t: +e.t || 0, s: e.s | 0, ts: +e.ts || 0, ip: String(e.ip || '') };
   });
   return json({ ok: true, count: out.length, board: out });
 }
