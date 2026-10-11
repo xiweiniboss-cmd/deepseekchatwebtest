@@ -866,7 +866,7 @@ async function handleAdminTp0kBoard(request, env) {
   let board = [];
   try { board = await tp0kBoardGet(kv, 1000); } catch (e) {}
   const out = board.map(function (e) {
-    return { n: String(e.n || '无名车手').slice(0, 12), d: String(e.d || ''), v0: +e.v0 || 0, t: +e.t || 0, s: e.s | 0, ts: e.ts | 0 };
+    return { n: String(e.n || '无名车手').slice(0, 12), d: String(e.d || ''), v0: +e.v0 || 0, t: +e.t || 0, s: e.s | 0, ts: +e.ts || 0 };
   });
   return json({ ok: true, count: out.length, board: out });
 }
