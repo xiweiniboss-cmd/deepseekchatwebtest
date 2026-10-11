@@ -738,13 +738,20 @@ async function handleBrakeStats(request, env) {
 async function handleKvHealth(request, env) {
   const kv = env.FEEDBACK_KV;
   let write = false;
+  let list = false;
   try {
     if (kv) {
       await kv.put('__kv_health__', String(Date.now()), { expirationTtl: 60 });
       write = true;
     }
   } catch (e) { write = false; }
-  return json({ ok: true, write: write });
+  try {
+    if (kv) {
+      await kv.list({ prefix: '__kv_health__', limit: 1 });
+      list = true;
+    }
+  } catch (e) { list = false; }
+  return json({ ok: true, write: write, list: list });
 }
 async function handleBrakeBoard(request, env) {
   const kv = env.FEEDBACK_KV;
