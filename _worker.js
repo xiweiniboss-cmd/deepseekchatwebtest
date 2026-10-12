@@ -898,6 +898,98 @@ async function handleAdminTp0kReset(request, env) {
   return json({ ok: true });
 }
 
+// ---------- tp0k 游戏记录（每局都记，成功/失败） ----------
+// 每局一个 key：tp0k_rec_<ts36>_<rand>；后台按时间倒序取最近 200 条
+async function handleTp0kGameRecord(request, env) {
+  const kv = env.FEEDBACK_KV;
+  if (!kv) return json({ error: '未启用' }, 503);
+  let b = {};
+  try { b = await request.json(); } catch (e) {}
+  let nickname = String(b.nickname || '').trim().slice(0, 12);
+  if (!nickname || brakeHasSensitive(nickname)) nickname = '无名车手';
+  const device = String(b.device || '').slice(0, 64) || 'anon';
+  const ok = b.result === 'success';
+  const reason = ok ? '' : String(b.reason || '失败').slice(0, 12);
+  const num = function (x, max) { const n = Number(x); return (isFinite(n) && n >= 0 && n <= max) ? n : 0; };
+  const v0 = num(b.v0, 500);
+  const stopTime = num(b.stopTime, 300);
+  const dist = num(b.dist, 5000);
+  const force = num(b.force, 3000);
+  const score = ok ? Math.round(num(b.score, 2500000)) : 0;
+  if (!(v0 > 0)) return json({ error: '数据异常' }, 400);
+  const ip = request.headers.get('cf-connecting-ip') || '';
+  if (ip && !(await brakeRateLimit(kv, ip))) {
+    return json({ error: '手速太快了，歇一会儿再战' }, 429);
+  }
+  const now = Date.now();
+  const key = 'tp0k_rec_' + now.toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+  const rec = { n: nickname, d: device, ok: ok ? 1 : 0, why: reason, v0: v0, t: stopTime, dist: dist, f: force, s: score, ts: now, ip: ip };
+  try {
+    await kv.put(key, JSON.stringify(rec));
+  } catch (e) {
+    return json({ error: '暂时无法同步服务器，记录未能保存' }, 503);
+  }
+  return json({ ok: true });
+}
+async function tp0kRecordsGet(kv, limit) {
+  const recs = [];
+  if (!kv) return recs;
+  try {
+    let cursor = undefined;
+    do {
+      const res = await kv.list({ prefix: 'tp0k_rec_', cursor: cursor, limit: 1000 });
+      if (res && res.keys) {
+        const vals = await Promise.all(res.keys.map(function (k) { return kv.get(k.name).then(function (v) { return { key: k.name, v: v }; }); }));
+        for (const item of vals) {
+          try { const e = JSON.parse(item.v); if (e && typeof e.ts === 'number') { e.key = item.key; recs.push(e); } } catch (e2) {}
+        }
+      }
+      cursor = res && !res.list_complete ? res.cursor : undefined;
+    } while (cursor);
+  } catch (e) {}
+  recs.sort(function (a, b) { return b.ts - a.ts; });
+  return recs.slice(0, limit || 200);
+}
+async function handleAdminTp0kRecords(request, env) {
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const kv = env.FEEDBACK_KV;
+  let recs = [];
+  try { recs = await tp0kRecordsGet(kv, 200); } catch (e) {}
+  let okCount = 0;
+  for (const e of recs) { if (e.ok) okCount++; }
+  const out = recs.map(function (e) {
+    return { key: String(e.key || ''), n: String(e.n || '无名车手').slice(0, 12), ok: e.ok ? 1 : 0, why: String(e.why || ''), v0: +e.v0 || 0, t: +e.t || 0, dist: +e.dist || 0, f: +e.f || 0, s: e.s | 0, ts: +e.ts || 0, ip: String(e.ip || '') };
+  });
+  return json({ ok: true, count: out.length, okCount: okCount, failCount: out.length - okCount, records: out });
+}
+async function handleAdminTp0kDeleteRecord(request, env) {
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const kv = env.FEEDBACK_KV;
+  let b = {};
+  try { b = await request.json(); } catch (e) {}
+  const key = String(b.key || '');
+  if (key.indexOf('tp0k_rec_') !== 0) return json({ ok: false, error: '记录不存在' }, 400);
+  try { if (kv) await kv.delete(key); } catch (e) {}
+  return json({ ok: true });
+}
+async function handleAdminTp0kClearRecords(request, env) {
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const kv = env.FEEDBACK_KV;
+  try {
+    if (kv) {
+      let cursor = undefined;
+      do {
+        const res = await kv.list({ prefix: 'tp0k_rec_', cursor: cursor, limit: 1000 });
+        if (res && res.keys) {
+          await Promise.all(res.keys.map(function (k) { return kv.delete(k.name); }));
+        }
+        cursor = res && !res.list_complete ? res.cursor : undefined;
+      } while (cursor);
+    }
+  } catch (e) {}
+  return json({ ok: true });
+}
+
 // ---------- 刹车站后台管理 ----------
 async function handleAdminBrakeRuns(request, env) {
   if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
@@ -1425,7 +1517,7 @@ export default {
       bh.set('Access-Control-Allow-Origin', '*');
       return new Response(br.body, { status: br.status, headers: bh });
     }
-    if ((url.pathname === '/api/leaderboard' || url.pathname === '/api/score' || url.pathname === '/api/check-nickname') && request.method === 'OPTIONS') {
+    if ((url.pathname === '/api/leaderboard' || url.pathname === '/api/score' || url.pathname === '/api/check-nickname' || url.pathname === '/api/game-record') && request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -1459,6 +1551,30 @@ export default {
     }
     if (url.pathname === '/api/score' && request.method === 'POST') {
       const br = await handleTp0kScore(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/game-record' && request.method === 'POST') {
+      const br = await handleTp0kGameRecord(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/admin/tp0k/records' && request.method === 'GET') {
+      const br = await handleAdminTp0kRecords(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/admin/tp0k/delete-record' && request.method === 'POST') {
+      const br = await handleAdminTp0kDeleteRecord(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/admin/tp0k/clear-records' && request.method === 'POST') {
+      const br = await handleAdminTp0kClearRecords(request, env);
       const bh = new Headers(br.headers);
       bh.set('Access-Control-Allow-Origin', '*');
       return new Response(br.body, { status: br.status, headers: bh });
