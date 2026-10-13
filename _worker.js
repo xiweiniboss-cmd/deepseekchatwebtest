@@ -743,13 +743,15 @@ async function handleKvHealth(request, env) {
   let list = false;
   try {
     if (kv) {
-      await kv.put('__kv_health__', String(Date.now()), { expirationTtl: 60 });
+      // 该 key 同时充当"写入配额"心跳：本接口每 30 分钟被巡检调用一次，TTL 3600 保证健康时 key 一直存在；
+      // /api/score 提交前只读它即可判断配额，无需额外写操作
+      await kv.put('tp0k_write_ok', '1', { expirationTtl: 3600 });
       write = true;
     }
   } catch (e) { write = false; }
   try {
     if (kv) {
-      await kv.list({ prefix: '__kv_health__', limit: 1 });
+      await kv.list({ prefix: 'tp0k_write_ok', limit: 1 });
       list = true;
     }
   } catch (e) { list = false; }
@@ -845,6 +847,13 @@ async function handleTp0kScore(request, env) {
   if (!(stopTime > 0 && stopTime <= 300)) return json({ error: '数据异常' }, 400);
   const score = Math.round(v0 * v0 / stopTime);
   if (!(score > 0 && score <= 2500000)) return json({ error: '数据异常' }, 400);
+  // 配额预检：写入配额烧完时直接提示明早八点，不再尝试注定失败的写操作；
+  // 心跳 key 由 /api/kv-health 每 30 分钟刷新（健康时）。读失败时放行，走正常流程兜底
+  try {
+    if ((await kv.get('tp0k_write_ok')) !== '1') {
+      return json({ error: '暂时无法同步至服务器，请等待明早八点后再试' }, 503);
+    }
+  } catch (e) {}
   const ip = request.headers.get('cf-connecting-ip') || '';
   // 与游戏记录共用限流计数：记录上报先发且每局必调，同一分钟窗口内计数 key 已存在即视为本局已计数，
   // 这里只读不写，成功局省 1 次 KV 写；直接调 /api/score 或跨分钟窗口的请求仍走完整限流
