@@ -626,11 +626,13 @@ async function dedupeBrakeRuns(kv, keys) {
 }
 // 刹车上报限流：单个 IP 每分钟最多 20 局（正常游玩一局至少十几秒，20/分钟只拦刷子）
 // 限流器自身故障时放行，不影响正常游玩
+function brakeRlKey(ip) {
+  return 'brake_rl_' + Math.floor(Date.now() / 60000) + '_' + String(ip || '').replace(/[^a-zA-Z0-9.:]/g, '').slice(0, 45);
+}
 async function brakeRateLimit(kv, ip) {
   if (!kv || !ip) return true;
   try {
-    const bucket = Math.floor(Date.now() / 60000);
-    const key = 'brake_rl_' + bucket + '_' + ip.replace(/[^a-zA-Z0-9.:]/g, '').slice(0, 45);
+    const key = brakeRlKey(ip);
     const raw = await kv.get(key);
     const n = (parseInt(raw || '0', 10) || 0) + 1;
     if (n > 20) return false;
@@ -781,6 +783,14 @@ function tp0kBestKey(device) {
 async function tp0kBoardSet(kv, device, name, v0, stopTime, score, ts, ip) {
   if (!kv || !device) return false;
   try {
+    // 上榜写限流：单个 IP 每分钟最多 20 次上榜写（与上报限流同口径），防刷榜脚本烧写配额；
+    // 正常游玩一局至少十几秒且需刷新个人纪录，远达不到；只在真正要写榜时计数
+    try {
+      const wkey = 'tp0k_bw_' + Math.floor(Date.now() / 60000) + '_' + String(ip || '').replace(/[^a-zA-Z0-9.:]/g, '').slice(0, 45);
+      const wn = (parseInt(await kv.get(wkey) || '0', 10) || 0) + 1;
+      if (wn > 20) return false;
+      await kv.put(wkey, String(wn), { expirationTtl: 75 });
+    } catch (e) { /* 计数器故障时放行，不影响正常上榜 */ }
     const key = tp0kBestKey(device);
     const raw = await kv.get(key);
     if (raw) {
@@ -836,8 +846,14 @@ async function handleTp0kScore(request, env) {
   const score = Math.round(v0 * v0 / stopTime);
   if (!(score > 0 && score <= 2500000)) return json({ error: '数据异常' }, 400);
   const ip = request.headers.get('cf-connecting-ip') || '';
-  if (ip && !(await brakeRateLimit(kv, ip))) {
-    return json({ error: '手速太快了，歇一会儿再战' }, 429);
+  // 与游戏记录共用限流计数：记录上报先发且每局必调，同一分钟窗口内计数 key 已存在即视为本局已计数，
+  // 这里只读不写，成功局省 1 次 KV 写；直接调 /api/score 或跨分钟窗口的请求仍走完整限流
+  if (ip) {
+    let counted = false;
+    try { counted = !!(await kv.get(brakeRlKey(ip))); } catch (e) {}
+    if (!counted && !(await brakeRateLimit(kv, ip))) {
+      return json({ error: '手速太快了，歇一会儿再战' }, 429);
+    }
   }
   const now = Date.now();
   let best = 0;
