@@ -867,12 +867,9 @@ async function handleTp0kScore(request, env) {
     try { ok = await tp0kBoardSet(kv, device, nickname, v0, stopTime, score, now, ip); } catch (e) {}
     if (!ok) return json({ error: '暂时无法同步服务器，成绩未能保存，请稍后再试' }, 503);
   }
-  let rank = 1;
-  try {
-    const board = await tp0kBoardGet(kv, 1000);
-    for (const e of board) { if (e.s > score) rank++; else break; }
-  } catch (e) {}
-  return json({ score: score, best: newBest, rank: rank });
+  // 注：提交时不再实时计算排名（原来要全榜 list + N 次 get，每次成功烧 1 次 list 配额）；
+  // 前端改为只显示得分/历史最佳，排名点开排行榜查看
+  return json({ score: score, best: newBest });
 }
 
 // ---------- tp0k 排行榜后台管理 ----------
