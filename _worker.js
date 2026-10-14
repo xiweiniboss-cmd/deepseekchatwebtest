@@ -1111,6 +1111,14 @@ async function handleFeedbackSubmit(request, env) {
     } catch {}
   }
   if (!text.trim()) return json({ ok: false, error: '请填写反馈内容' }, 400);
+  // 配额预检（刹车站）：写入配额烧完时直接提示，不再尝试注定失败的写操作；读失败时放行，走正常流程兜底
+  if (site === '[刹车站]') {
+    try {
+      if ((await kv.get('tp0k_write_ok')) !== '1') {
+        return json({ ok: false, error: '反馈系统将于明日早上八点后恢复正常，请耐心等待，谢谢配合' }, 503);
+      }
+    } catch (e) {}
+  }
   if (tsSecret && site !== '[刹车站]') { // 刹车站为跨域提交，跳过 Turnstile，IP 冷却仍生效
     if (!tsToken) return json({ ok: false, error: '请先完成人机验证' }, 400);
     const ok = await verifyTurnstile(tsToken, tsSecret, request.headers.get('cf-connecting-ip'));
