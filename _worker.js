@@ -565,13 +565,20 @@ let _brakeSWSetNorm = null;
 // 分隔符归一化：n.m.s.l / n m s l / n-m-s-l 这类加分隔符的变形同样命中
 const BRAKE_SEP_RE = /[\s.,\-_*\/\\|·•、。．，：:；;！!？?～~'"''""()（）\[\]【】{}<>《》^$#@&+=]+/g;
 function brakeStripSep(s) { return s.replace(BRAKE_SEP_RE, ''); }
+// 全角转半角：ｎｍｓｌ → nmsl
+function brakeFoldWidth(s) { return s.replace(/[！-～]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 65248); }).replace(/　/g, ' '); }
 function brakeHasSensitive(name) {
   if (!_brakeSWSet) {
-    _brakeSWSet = new Set(BRAKE_SENSITIVE_WORDS.split('\n').map(function (w) { return w.toLowerCase(); }));
+    _brakeSWSet = new Set();
     _brakeSWSetNorm = new Set();
-    _brakeSWSet.forEach(function (w) { const n = brakeStripSep(w); if (n) _brakeSWSetNorm.add(n); });
+    BRAKE_SENSITIVE_WORDS.split('\n').forEach(function (w) {
+      w = brakeFoldWidth(w).toLowerCase();
+      if (w) _brakeSWSet.add(w);
+      const n = brakeStripSep(w);
+      if (n) _brakeSWSetNorm.add(n);
+    });
   }
-  const t = String(name || '').toLowerCase();
+  const t = brakeFoldWidth(String(name || '')).toLowerCase();
   for (const w of _brakeSWSet) { if (w && t.indexOf(w) !== -1) return true; }
   const t2 = brakeStripSep(t);
   if (t2 !== t) { for (const w of _brakeSWSetNorm) { if (w && t2.indexOf(w) !== -1) return true; } }
