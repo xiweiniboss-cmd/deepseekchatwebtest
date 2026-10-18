@@ -1577,7 +1577,8 @@ export default {
       bh.set('Access-Control-Allow-Origin', '*');
       return new Response(br.body, { status: br.status, headers: bh });
     }
-    if ((url.pathname === '/api/leaderboard' || url.pathname === '/api/score' || url.pathname === '/api/check-nickname' || url.pathname === '/api/game-record') && request.method === 'OPTIONS') {
+    // 所有 /api/* 的 CORS 预检统一放行（含后台管理接口，否则跨域 POST 会被浏览器直接拦截）
+    if (url.pathname.startsWith('/api/') && request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
