@@ -973,21 +973,34 @@ async function handleTp0kGameRecord(request, env) {
 async function tp0kRecordsGet(kv, limit) {
   const recs = [];
   if (!kv) return recs;
+  const want = limit || 200;
   try {
+    // 先只列 key 名（不读 value），按 key 倒序取最近一批再读值，避免一次并发取全量 value 触发 Worker 上限；
+    // key 形如 tp0k_rec_<ts36>_<rand>，ts36 在 2036 年前定长，字典序即时间序
+    const names = [];
     let cursor = undefined;
     do {
       const res = await kv.list({ prefix: 'tp0k_rec_', cursor: cursor, limit: 1000 });
       if (res && res.keys) {
-        const vals = await Promise.all(res.keys.map(function (k) { return kv.get(k.name).then(function (v) { return { key: k.name, v: v }; }); }));
-        for (const item of vals) {
-          try { const e = JSON.parse(item.v); if (e && typeof e.ts === 'number') { e.key = item.key; recs.push(e); } } catch (e2) {}
-        }
+        for (const k of res.keys) names.push(k.name);
       }
       cursor = res && !res.list_complete ? res.cursor : undefined;
     } while (cursor);
+    names.sort().reverse();
+    const batch = names.slice(0, want + 50);
+    // 分批读取，单条失败不影响整体
+    for (let i = 0; i < batch.length; i += 50) {
+      const chunk = batch.slice(i, i + 50);
+      const vals = await Promise.all(chunk.map(function (k) {
+        return kv.get(k).then(function (v) { return { key: k, v: v }; }, function () { return { key: k, v: null }; });
+      }));
+      for (const item of vals) {
+        try { const e = JSON.parse(item.v); if (e && typeof e.ts === 'number') { e.key = item.key; recs.push(e); } } catch (e2) {}
+      }
+    }
   } catch (e) {}
   recs.sort(function (a, b) { return b.ts - a.ts; });
-  return recs.slice(0, limit || 200);
+  return recs.slice(0, want);
 }
 async function handleAdminTp0kRecords(request, env) {
   if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
