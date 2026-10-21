@@ -1042,6 +1042,239 @@ async function handleAdminTp0kClearRecords(request, env) {
   return json({ ok: true });
 }
 
+// ---------- 智驾接管模拟器：记录 / 排行榜 / 后台 ----------
+// 排行榜只收困难模式（遥遥领先）胜利局；得分 = round(100000 / 刹车用时秒)，用时越短分越高
+function zhijiaBestKey(device) {
+  return 'zhijia_best_' + String(device || 'anon').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
+}
+async function zhijiaBoardSet(kv, device, name, brakeTime, margin, reaction, score, ts, ip) {
+  if (!kv || !device) return false;
+  try {
+    try {
+      const wkey = 'zhijia_bw_' + Math.floor(Date.now() / 60000) + '_' + String(ip || '').replace(/[^a-zA-Z0-9.:]/g, '').slice(0, 45);
+      const wn = (parseInt(await kv.get(wkey) || '0', 10) || 0) + 1;
+      if (wn > 20) return false;
+      await kv.put(wkey, String(wn), { expirationTtl: 75 });
+    } catch (e) {}
+    const key = zhijiaBestKey(device);
+    const raw = await kv.get(key);
+    if (raw) {
+      try { const ex = JSON.parse(raw); if (ex && typeof ex.s === 'number' && ex.s >= score) return false; } catch (e2) {}
+    }
+    await kv.put(key, JSON.stringify({ n: name, d: device, t: brakeTime, m: margin, r: reaction, s: score, ts: ts, ip: ip || '' }));
+    return true;
+  } catch (e) { return false; }
+}
+async function zhijiaBoardGet(kv, limit) {
+  const board = [];
+  if (!kv) return board;
+  try {
+    let cursor = undefined;
+    do {
+      const res = await kv.list({ prefix: 'zhijia_best_', cursor: cursor, limit: 1000 });
+      if (res && res.keys) {
+        const vals = await Promise.all(res.keys.map(function (k) { return kv.get(k.name); }));
+        for (const v of vals) {
+          try { const e = JSON.parse(v); if (e && typeof e.s === 'number') board.push(e); } catch (e2) {}
+        }
+      }
+      cursor = res && !res.list_complete ? res.cursor : undefined;
+    } while (cursor);
+  } catch (e) {}
+  board.sort(function (a, b) { return b.s - a.s; });
+  return board.slice(0, limit || 50);
+}
+async function handleZhijiaLeaderboard(request, env) {
+  const kv = env.FEEDBACK_KV;
+  const url = new URL(request.url);
+  const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 1), 100);
+  let board = [];
+  try { board = await zhijiaBoardGet(kv, limit); } catch (e) {}
+  const entries = board.map(function (e) {
+    return { nickname: String(e.n || '无名车手').slice(0, 12), brakeTime: +e.t || 0, margin: +e.m || 0, score: e.s | 0 };
+  });
+  return json({ entries: entries });
+}
+async function handleZhijiaScore(request, env) {
+  const kv = env.FEEDBACK_KV;
+  if (!kv) return json({ error: '未启用' }, 503);
+  let b = {};
+  try { b = await request.json(); } catch (e) {}
+  const nickname = String(b.nickname || '').trim().slice(0, 12);
+  const device = String(b.device || '').slice(0, 64) || 'anon';
+  const brakeTime = Number(b.brakeTime);
+  const margin = Number(b.margin);
+  const reaction = (b.reaction === null || b.reaction === undefined || isNaN(Number(b.reaction))) ? -1 : Number(b.reaction);
+  if (!nickname) return json({ error: '请先输入昵称' }, 400);
+  if (brakeHasSensitive(nickname)) return json({ error: '昵称包含敏感词，换一个吧' }, 400);
+  if (!(brakeTime > 0 && brakeTime <= 30)) return json({ error: '数据异常' }, 400);
+  if (!(margin >= 0 && margin <= 260)) return json({ error: '数据异常' }, 400);
+  if (!(reaction >= -1 && reaction <= 30)) return json({ error: '数据异常' }, 400);
+  const score = Math.round(100000 / brakeTime);
+  if (!(score > 0 && score <= 200000)) return json({ error: '数据异常' }, 400);
+  try {
+    if ((await kv.get('tp0k_write_ok')) !== '1') {
+      return json({ error: '暂时无法同步至服务器，请等待明早八点后再试' }, 503);
+    }
+  } catch (e) {}
+  const ip = request.headers.get('cf-connecting-ip') || '';
+  if (ip) {
+    let counted = false;
+    try { counted = !!(await kv.get(brakeRlKey(ip))); } catch (e) {}
+    if (!counted && !(await brakeRateLimit(kv, ip))) {
+      return json({ error: '手速太快了，歇一会儿再战' }, 429);
+    }
+  }
+  const now = Date.now();
+  let best = 0;
+  try {
+    const raw = await kv.get(zhijiaBestKey(device));
+    if (raw) { try { const ex = JSON.parse(raw); if (ex && typeof ex.s === 'number') best = ex.s; } catch (e2) {} }
+  } catch (e) {}
+  const newBest = Math.max(best, score);
+  if (score > best) {
+    let ok = false;
+    try { ok = await zhijiaBoardSet(kv, device, nickname, brakeTime, margin, reaction, score, now, ip); } catch (e) {}
+    if (!ok) return json({ error: '暂时无法同步服务器，成绩未能保存，请稍后再试' }, 503);
+  }
+  return json({ score: score, best: newBest });
+}
+async function handleZhijiaRecord(request, env) {
+  const kv = env.FEEDBACK_KV;
+  if (!kv) return json({ error: '未启用' }, 503);
+  let b = {};
+  try { b = await request.json(); } catch (e) {}
+  let nickname = String(b.nickname || '').trim().slice(0, 12);
+  if (!nickname || brakeHasSensitive(nickname)) nickname = '无名车手';
+  const device = String(b.device || '').slice(0, 64) || 'anon';
+  const mode = b.mode === 'easy' ? 'easy' : 'hard';
+  const results = ['win', 'snap', 'burned', 'news', 'survive'];
+  const result = results.indexOf(String(b.result || '')) >= 0 ? String(b.result) : 'snap';
+  const num = function (x, max) { const n = Number(x); return (isFinite(n) && n >= 0 && n <= max) ? n : 0; };
+  const brakeTime = num(b.brakeTime, 60);
+  const reaction = (b.reaction === null || b.reaction === undefined || isNaN(Number(b.reaction))) ? -1 : num(b.reaction, 60);
+  const maxForce = num(b.maxForce, 3000);
+  const maxSpeed = num(b.maxSpeed, 200);
+  const margin = num(b.margin, 300);
+  const ip = request.headers.get('cf-connecting-ip') || '';
+  if (ip && !(await brakeRateLimit(kv, ip))) {
+    return json({ error: '手速太快了，歇一会儿再战' }, 429);
+  }
+  const now = Date.now();
+  const key = 'zhijia_rec_' + now.toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+  const rec = { n: nickname, d: device, mode: mode, result: result, t: brakeTime, r: reaction, f: maxForce, v: maxSpeed, m: margin, ts: now, ip: ip };
+  try {
+    await kv.put(key, JSON.stringify(rec));
+  } catch (e) {
+    return json({ error: '暂时无法同步服务器，记录未能保存' }, 503);
+  }
+  return json({ ok: true });
+}
+async function zhijiaRecordsGet(kv, limit) {
+  const recs = [];
+  if (!kv) return recs;
+  const want = limit || 200;
+  try {
+    const names = [];
+    let cursor = undefined;
+    do {
+      const res = await kv.list({ prefix: 'zhijia_rec_', cursor: cursor, limit: 1000 });
+      if (res && res.keys) {
+        for (const k of res.keys) names.push(k.name);
+      }
+      cursor = res && !res.list_complete ? res.cursor : undefined;
+    } while (cursor);
+    names.sort().reverse();
+    const batch = names.slice(0, want + 50);
+    for (let i = 0; i < batch.length; i += 50) {
+      const chunk = batch.slice(i, i + 50);
+      const vals = await Promise.all(chunk.map(function (k) {
+        return kv.get(k).then(function (v) { return { key: k, v: v }; }, function () { return { key: k, v: null }; });
+      }));
+      for (const item of vals) {
+        try { const e = JSON.parse(item.v); if (e && typeof e.ts === 'number') { e.key = item.key; recs.push(e); } } catch (e2) {}
+      }
+    }
+  } catch (e) {}
+  recs.sort(function (a, b) { return b.ts - a.ts; });
+  return recs.slice(0, want);
+}
+async function handleAdminZhijiaBoard(request, env) {
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const kv = env.FEEDBACK_KV;
+  let board = [];
+  try { board = await zhijiaBoardGet(kv, 1000); } catch (e) {}
+  const out = board.map(function (e) {
+    return { n: String(e.n || '无名车手').slice(0, 12), d: String(e.d || ''), t: +e.t || 0, m: +e.m || 0, r: (typeof e.r === 'number' ? e.r : -1), s: e.s | 0, ts: +e.ts || 0, ip: String(e.ip || '') };
+  });
+  return json({ ok: true, count: out.length, board: out });
+}
+async function handleAdminZhijiaDeleteEntry(request, env) {
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const kv = env.FEEDBACK_KV;
+  let b = {};
+  try { b = await request.json(); } catch (e) {}
+  const device = String(b.device || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
+  if (!device) return json({ ok: false, error: '缺少设备' }, 400);
+  try { if (kv) await kv.delete(zhijiaBestKey(device)); } catch (e) {}
+  return json({ ok: true });
+}
+async function handleAdminZhijiaReset(request, env) {
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const kv = env.FEEDBACK_KV;
+  try {
+    if (kv) {
+      let cursor = undefined;
+      do {
+        const res = await kv.list({ prefix: 'zhijia_best_', cursor: cursor, limit: 1000 });
+        if (res && res.keys) {
+          await Promise.all(res.keys.map(function (k) { return kv.delete(k.name); }));
+        }
+        cursor = res && !res.list_complete ? res.cursor : undefined;
+      } while (cursor);
+    }
+  } catch (e) {}
+  return json({ ok: true });
+}
+async function handleAdminZhijiaRecords(request, env) {
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const kv = env.FEEDBACK_KV;
+  let recs = [];
+  try { recs = await zhijiaRecordsGet(kv, 200); } catch (e) {}
+  const out = recs.map(function (e) {
+    return { key: String(e.key || ''), n: String(e.n || '无名车手').slice(0, 12), mode: String(e.mode || ''), result: String(e.result || ''), t: +e.t || 0, r: (typeof e.r === 'number' ? e.r : -1), f: +e.f || 0, v: +e.v || 0, m: +e.m || 0, ts: +e.ts || 0, ip: String(e.ip || '') };
+  });
+  const wins = out.filter(function (e) { return e.result === 'win'; }).length;
+  return json({ ok: true, count: out.length, winCount: wins, records: out });
+}
+async function handleAdminZhijiaDeleteRecord(request, env) {
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const kv = env.FEEDBACK_KV;
+  let b = {};
+  try { b = await request.json(); } catch (e) {}
+  const key = String(b.key || '');
+  if (key.indexOf('zhijia_rec_') !== 0) return json({ ok: false, error: '记录不存在' }, 400);
+  try { if (kv) await kv.delete(key); } catch (e) {}
+  return json({ ok: true });
+}
+async function handleAdminZhijiaClearRecords(request, env) {
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  const kv = env.FEEDBACK_KV;
+  try {
+    if (kv) {
+      let cursor = undefined;
+      do {
+        const res = await kv.list({ prefix: 'zhijia_rec_', cursor: cursor, limit: 1000 });
+        if (res && res.keys) {
+          await Promise.all(res.keys.map(function (k) { return kv.delete(k.name); }));
+        }
+        cursor = res && !res.list_complete ? res.cursor : undefined;
+      } while (cursor);
+    }
+  } catch (e) {}
+  return json({ ok: true });
+}
+
 // ---------- 刹车站后台管理 ----------
 async function handleAdminBrakeRuns(request, env) {
   if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
@@ -1123,7 +1356,7 @@ async function handleFeedbackSubmit(request, env) {
     text = String(form.get('text') || '').slice(0, 2000);
     contact = String(form.get('contact') || '').slice(0, 200);
     tsToken = String(form.get('turnstile') || '');
-    if (String(form.get('site') || '') === '[刹车站]') site = '[刹车站]';
+    const sInF = String(form.get('site') || ''); if (sInF === '[刹车站]' || sInF === '[智驾站]') site = sInF;
     for (const f of form.getAll('files')) {
       if (f && typeof f.arrayBuffer === 'function' && f.size > 0) {
         if (f.size > 20*1024*1024) return json({ ok: false, error: '单个文件不能超过20MB' }, 400);
@@ -1137,19 +1370,19 @@ async function handleFeedbackSubmit(request, env) {
       text = String(j.text || '').slice(0, 2000);
       contact = String(j.contact || '').slice(0, 200);
       tsToken = String(j.turnstile || '');
-      if (String(j.site || '') === '[刹车站]') site = '[刹车站]';
+      const sInJ = String(j.site || ''); if (sInJ === '[刹车站]' || sInJ === '[智驾站]') site = sInJ;
     } catch {}
   }
   if (!text.trim()) return json({ ok: false, error: '请填写反馈内容' }, 400);
   // 配额预检（刹车站）：写入配额烧完时直接提示，不再尝试注定失败的写操作；读失败时放行，走正常流程兜底
-  if (site === '[刹车站]') {
+  if (site === '[刹车站]' || site === '[智驾站]') {
     try {
       if ((await kv.get('tp0k_write_ok')) !== '1') {
         return json({ ok: false, error: '反馈系统将于明日早上八点后恢复正常，请耐心等待，谢谢配合' }, 503);
       }
     } catch (e) {}
   }
-  if (tsSecret && site !== '[刹车站]') { // 刹车站为跨域提交，跳过 Turnstile，IP 冷却仍生效
+  if (tsSecret && site !== '[刹车站]' && site !== '[智驾站]') { // 游戏站为跨域提交，跳过 Turnstile，IP 冷却仍生效
     if (!tsToken) return json({ ok: false, error: '请先完成人机验证' }, 400);
     const ok = await verifyTurnstile(tsToken, tsSecret, request.headers.get('cf-connecting-ip'));
     if (!ok) return json({ ok: false, error: '人机验证未通过，请重试' }, 403);
@@ -1654,6 +1887,60 @@ export default {
     }
     if (url.pathname === '/api/admin/tp0k/reset' && request.method === 'POST') {
       const br = await handleAdminTp0kReset(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/zhijia/leaderboard' && request.method === 'GET') {
+      const br = await handleZhijiaLeaderboard(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/zhijia/score' && request.method === 'POST') {
+      const br = await handleZhijiaScore(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/zhijia/record' && request.method === 'POST') {
+      const br = await handleZhijiaRecord(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/admin/zhijia/board' && request.method === 'GET') {
+      const br = await handleAdminZhijiaBoard(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/admin/zhijia/delete-entry' && request.method === 'POST') {
+      const br = await handleAdminZhijiaDeleteEntry(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/admin/zhijia/reset' && request.method === 'POST') {
+      const br = await handleAdminZhijiaReset(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/admin/zhijia/records' && request.method === 'GET') {
+      const br = await handleAdminZhijiaRecords(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/admin/zhijia/delete-record' && request.method === 'POST') {
+      const br = await handleAdminZhijiaDeleteRecord(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/admin/zhijia/clear-records' && request.method === 'POST') {
+      const br = await handleAdminZhijiaClearRecords(request, env);
       const bh = new Headers(br.headers);
       bh.set('Access-Control-Allow-Origin', '*');
       return new Response(br.body, { status: br.status, headers: bh });
