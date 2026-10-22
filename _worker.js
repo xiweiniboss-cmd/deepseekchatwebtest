@@ -1044,8 +1044,8 @@ async function handleAdminTp0kClearRecords(request, env) {
 
 
 // ---------- 智驾 D1 存储（2026-10-23 从 KV 迁移；绑定名 DB） ----------
-const ZJ_SCORES_SQL = 'CREATE TABLE IF NOT EXISTS zhijia_scores (device TEXT PRIMARY KEY, n TEXT, t REAL, m REAL, r REAL, s INTEGER, ts INTEGER, ip TEXT)';
-const ZJ_RECORDS_SQL = 'CREATE TABLE IF NOT EXISTS zhijia_records (rkey TEXT PRIMARY KEY, n TEXT, d TEXT, mode TEXT, result TEXT, t REAL, r REAL, f REAL, v REAL, m REAL, ts INTEGER, ip TEXT)';
+const ZJ_SCORES_SQL = 'CREATE TABLE IF NOT EXISTS zhijia_scores (device TEXT PRIMARY KEY, n TEXT, t REAL, m REAL, r REAL, s INTEGER, ts INTEGER, ip TEXT, stage INTEGER NOT NULL DEFAULT 1, et REAL DEFAULT 0)';
+const ZJ_RECORDS_SQL = 'CREATE TABLE IF NOT EXISTS zhijia_records (rkey TEXT PRIMARY KEY, n TEXT, d TEXT, mode TEXT, result TEXT, t REAL, r REAL, f REAL, v REAL, m REAL, ts INTEGER, ip TEXT, et REAL DEFAULT 0)';
 let zjDbReady = false;
 async function zjDb(env) {
   const db = env.DB;
@@ -1053,6 +1053,15 @@ async function zjDb(env) {
   if (!zjDbReady) {
     await db.prepare(ZJ_SCORES_SQL).run();
     await db.prepare(ZJ_RECORDS_SQL).run();
+    try {
+      const cols = await db.prepare('PRAGMA table_info(zhijia_scores)').all();
+      const names = (cols.results || []).map(function (c) { return c.name; });
+      if (names.indexOf('stage') < 0) await db.prepare('ALTER TABLE zhijia_scores ADD COLUMN stage INTEGER NOT NULL DEFAULT 1').run();
+      if (names.indexOf('et') < 0) await db.prepare('ALTER TABLE zhijia_scores ADD COLUMN et REAL DEFAULT 0').run();
+      const rcols = await db.prepare('PRAGMA table_info(zhijia_records)').all();
+      const rnames = (rcols.results || []).map(function (c) { return c.name; });
+      if (rnames.indexOf('et') < 0) await db.prepare('ALTER TABLE zhijia_records ADD COLUMN et REAL DEFAULT 0').run();
+    } catch (e) {}
     zjDbReady = true;
   }
   return db;
@@ -1103,20 +1112,20 @@ async function zhijiaBoardGet(kv, limit) {
   board.sort(function (a, b) { return b.s - a.s; });
   return board.slice(0, limit || 50);
 }
-async function zjBoardSetDb(env, device, name, brakeTime, margin, reaction, score, ts, ip) {
+async function zjBoardSetDb(env, ent) {
   const db = await zjDb(env);
-  if (!db || !device) return false;
+  if (!db || !ent.device) return false;
   try {
     try {
       const kv = env.FEEDBACK_KV;
       if (kv) {
-        const wkey = 'zhijia_bw_' + Math.floor(Date.now() / 60000) + '_' + String(ip || '').replace(/[^a-zA-Z0-9.:]/g, '').slice(0, 45);
+        const wkey = 'zhijia_bw_' + Math.floor(Date.now() / 60000) + '_' + String(ent.ip || '').replace(/[^a-zA-Z0-9.:]/g, '').slice(0, 45);
         const wn = (parseInt(await kv.get(wkey) || '0', 10) || 0) + 1;
         if (wn > 20) return false;
         await kv.put(wkey, String(wn), { expirationTtl: 75 });
       }
     } catch (e) {}
-    const res = await db.prepare('INSERT INTO zhijia_scores (device, n, t, m, r, s, ts, ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(device) DO UPDATE SET n = excluded.n, t = excluded.t, m = excluded.m, r = excluded.r, s = excluded.s, ts = excluded.ts, ip = excluded.ip WHERE excluded.s > zhijia_scores.s').bind(zjDev(device), name, brakeTime, margin, reaction, score, ts, ip || '').run();
+    const res = await db.prepare('INSERT INTO zhijia_scores (device, n, t, m, r, s, ts, ip, stage, et) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(device) DO UPDATE SET n = excluded.n, t = excluded.t, m = excluded.m, r = excluded.r, s = excluded.s, ts = excluded.ts, ip = excluded.ip, stage = excluded.stage, et = excluded.et WHERE excluded.s > zhijia_scores.s').bind(zjDev(ent.device), ent.name, ent.t || 0, ent.m || 0, (typeof ent.r === 'number' ? ent.r : -1), ent.s, ent.ts, ent.ip || '', ent.stage || 1, ent.et || 0).run();
     return !!(res && res.meta && res.meta.changes > 0);
   } catch (e) { return false; }
 }
@@ -1127,9 +1136,9 @@ async function handleZhijiaLeaderboard(request, env) {
   try {
     const db = await zjDb(env);
     if (db) {
-      const res = await db.prepare('SELECT n, t, m, r, s FROM zhijia_scores ORDER BY s DESC LIMIT ?').bind(limit).all();
+      const res = await db.prepare('SELECT n, t, m, r, s, stage, et, ts FROM zhijia_scores ORDER BY s DESC LIMIT ?').bind(limit).all();
       entries = (res.results || []).map(function (e) {
-        return { nickname: String(e.n || '无名车手').slice(0, 12), brakeTime: +e.t || 0, margin: +e.m || 0, reaction: (typeof e.r === 'number' ? e.r : -1), score: e.s | 0 };
+        return { nickname: String(e.n || '无名车手').slice(0, 12), brakeTime: +e.t || 0, margin: +e.m || 0, reaction: (typeof e.r === 'number' ? e.r : -1), score: e.s | 0, stage: e.stage === 2 ? 2 : 1, escapeTime: +e.et || 0, ts: +e.ts || 0 };
       });
     }
   } catch (e) {}
@@ -1173,7 +1182,58 @@ async function handleZhijiaScore(request, env) {
   const newBest = Math.max(best, score);
   if (score > best) {
     let ok = false;
-    try { ok = await zjBoardSetDb(env, device, nickname, brakeTime, margin, reaction, score, now, ip); } catch (e) {}
+    try { ok = await zjBoardSetDb(env, { device: device, name: nickname, t: brakeTime, m: margin, r: reaction, s: score, ts: now, ip: ip, stage: 1, et: 0 }); } catch (e) {}
+    if (!ok) return json({ error: '暂时无法同步服务器，成绩未能保存，请稍后再试' }, 503);
+  }
+  return json({ score: score, best: newBest });
+}
+// [临时] D1 探针清理（删 d1probe 设备行）。验收后整段删除。
+const PROBE_TOKEN = '368f342010032d9405d6faefc85fa27eaa959ca9c7747b12';
+async function handleD1ProbeClean(request, env) {
+  if ((request.headers.get('x-probe-token') || '') !== PROBE_TOKEN) return json({ error: 'forbidden' }, 403);
+  const db = await zjDb(env);
+  if (!db) return json({ error: 'DB missing' }, 500);
+  await db.prepare("DELETE FROM zhijia_scores WHERE device LIKE 'd1probe%'").run();
+  await db.prepare("DELETE FROM zhijia_records WHERE d LIKE 'd1probe%'").run();
+  const c = await db.prepare('SELECT COUNT(*) AS c FROM zhijia_scores').first();
+  return json({ ok: true, scoresNow: c ? c.c : -1 });
+}
+
+async function handleZhijiaScore2(request, env) {
+  let b = {};
+  try { b = await request.json(); } catch (e) {}
+  let nickname = String(b.nickname || '').trim().slice(0, 12);
+  const device = String(b.device || '').slice(0, 64) || 'anon';
+  const escapeTime = Number(b.escapeTime);
+  const reaction = (b.reaction === null || b.reaction === undefined || isNaN(Number(b.reaction))) ? -1 : Number(b.reaction);
+  if (!nickname || brakeHasSensitive(nickname)) nickname = '无名车手';
+  if (!(escapeTime > 0 && escapeTime <= 3)) return json({ error: '数据异常' }, 400);
+  if (!(reaction >= -1 && reaction <= 30)) return json({ error: '数据异常' }, 400);
+  // 急救得分 = 剩余时间每 0.01 秒 1000 分（2026-10-23 定版）；压线完成保底 1000 分
+  const score = Math.max(1, Math.round((3 - escapeTime) * 100)) * 1000;
+  if (!(score > 0 && score <= 300000)) return json({ error: '数据异常' }, 400);
+  const kv = env.FEEDBACK_KV;
+  const ip = request.headers.get('cf-connecting-ip') || '';
+  if (ip && kv) {
+    let counted = false;
+    try { counted = !!(await kv.get(brakeRlKey(ip))); } catch (e) {}
+    if (!counted && !(await brakeRateLimit(kv, ip))) {
+      return json({ error: '手速太快了，歇一会儿再战' }, 429);
+    }
+  }
+  const now = Date.now();
+  let best = 0;
+  try {
+    const db = await zjDb(env);
+    if (db) {
+      const row = await db.prepare('SELECT s FROM zhijia_scores WHERE device = ?').bind(zjDev(device)).first();
+      if (row && typeof row.s === 'number') best = row.s;
+    }
+  } catch (e) {}
+  const newBest = Math.max(best, score);
+  if (score > best) {
+    let ok = false;
+    try { ok = await zjBoardSetDb(env, { device: device, name: nickname, t: 0, m: 0, r: reaction, s: score, ts: now, ip: ip, stage: 2, et: escapeTime }); } catch (e) {}
     if (!ok) return json({ error: '暂时无法同步服务器，成绩未能保存，请稍后再试' }, 503);
   }
   return json({ score: score, best: newBest });
@@ -1195,17 +1255,18 @@ async function handleZhijiaRecord(request, env) {
   const maxForce = num(b.maxForce, 3000);
   const maxSpeed = num(b.maxSpeed, 200);
   const margin = num(b.margin, 300);
+  const escT = num(b.escapeTime, 10);
   const ip = request.headers.get('cf-connecting-ip') || '';
   if (ip && !(await brakeRateLimit(kv, ip))) {
     return json({ error: '手速太快了，歇一会儿再战' }, 429);
   }
   const now = Date.now();
   const key = 'zhijia_rec_' + now.toString(36) + '_' + Math.random().toString(36).slice(2, 8);
-  const rec = { n: nickname, d: device, mode: mode, result: result, t: brakeTime, r: reaction, f: maxForce, v: maxSpeed, m: margin, ts: now, ip: ip };
+  const rec = { n: nickname, d: device, mode: mode, result: result, t: brakeTime, r: reaction, f: maxForce, v: maxSpeed, m: margin, ts: now, ip: ip, et: escT };
   try {
     const db = await zjDb(env);
     if (!db) throw new Error('no db');
-    await db.prepare('INSERT INTO zhijia_records (rkey, n, d, mode, result, t, r, f, v, m, ts, ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(key, rec.n, rec.d, rec.mode, rec.result, rec.t, rec.r, rec.f, rec.v, rec.m, rec.ts, rec.ip).run();
+    await db.prepare('INSERT INTO zhijia_records (rkey, n, d, mode, result, t, r, f, v, m, ts, ip, et) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(key, rec.n, rec.d, rec.mode, rec.result, rec.t, rec.r, rec.f, rec.v, rec.m, rec.ts, rec.ip, rec.et).run();
   } catch (e) {
     return json({ error: '暂时无法同步服务器，记录未能保存' }, 503);
   }
@@ -1246,12 +1307,12 @@ async function handleAdminZhijiaBoard(request, env) {
   try {
     const db = await zjDb(env);
     if (db) {
-      const res = await db.prepare('SELECT device, n, t, m, r, s, ts, ip FROM zhijia_scores ORDER BY s DESC LIMIT 1000').all();
-      board = (res.results || []).map(function (e) { return { n: e.n, d: e.device, t: e.t, m: e.m, r: e.r, s: e.s, ts: e.ts, ip: e.ip }; });
+      const res = await db.prepare('SELECT device, n, t, m, r, s, ts, ip, stage, et FROM zhijia_scores ORDER BY s DESC LIMIT 1000').all();
+      board = (res.results || []).map(function (e) { return { n: e.n, d: e.device, t: e.t, m: e.m, r: e.r, s: e.s, ts: e.ts, ip: e.ip, stage: e.stage === 2 ? 2 : 1, et: +e.et || 0 }; });
     }
   } catch (e) {}
   const out = board.map(function (e) {
-    return { n: String(e.n || '无名车手').slice(0, 12), d: String(e.d || ''), t: +e.t || 0, m: +e.m || 0, r: (typeof e.r === 'number' ? e.r : -1), s: e.s | 0, ts: +e.ts || 0, ip: String(e.ip || '') };
+    return { n: String(e.n || '无名车手').slice(0, 12), d: String(e.d || ''), t: +e.t || 0, m: +e.m || 0, r: (typeof e.r === 'number' ? e.r : -1), s: e.s | 0, ts: +e.ts || 0, ip: String(e.ip || ''), stage: e.stage === 2 ? 2 : 1, et: +e.et || 0 };
   });
   return json({ ok: true, count: out.length, board: out });
 }
@@ -1935,6 +1996,18 @@ export default {
     }
     if (url.pathname === '/api/zhijia/score' && request.method === 'POST') {
       const br = await handleZhijiaScore(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/zhijia/score2' && request.method === 'POST') {
+      const br = await handleZhijiaScore2(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/admin/d1-probe-clean' && request.method === 'POST') {
+      const br = await handleD1ProbeClean(request, env);
       const bh = new Headers(br.headers);
       bh.set('Access-Control-Allow-Origin', '*');
       return new Response(br.body, { status: br.status, headers: bh });
