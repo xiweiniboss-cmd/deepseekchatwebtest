@@ -1743,28 +1743,29 @@ async function handlePurgeBrakeKv(request, env) {
   const kv = env.FEEDBACK_KV;
   if (!kv) return json({ error: 'no kv' }, 500);
   const prefixes = ['tp0k_', 'brake_'];
-  const deleted = {}, remaining = {};
+  const BUDGET = 300; // max KV ops per invocation (stay well under worker subrequest limits)
+  const deletedNow = {};
+  let budget = BUDGET;
   for (const p of prefixes) {
-    let n = 0, cursor = undefined, guard = 0;
-    while (guard++ < 200) {
-      const res = await kv.list({ prefix: p, limit: 1000, cursor });
-      for (const k of res.keys) { await kv.delete(k.name); n++; }
-      if (res.list_complete) break;
+    let n = 0, cursor = undefined;
+    while (budget > 0) {
+      const res = await kv.list({ prefix: p, limit: Math.min(1000, budget), cursor });
+      budget--; // count the list op too
+      for (const k of res.keys) {
+        if (budget <= 0) break;
+        await kv.delete(k.name); budget--; n++;
+      }
+      if (res.list_complete || budget <= 0) break;
       cursor = res.cursor;
     }
-    deleted[p] = n;
+    deletedNow[p] = n;
   }
+  const empty = {};
   for (const p of prefixes) {
-    let n = 0, cursor = undefined, guard = 0;
-    while (guard++ < 200) {
-      const res = await kv.list({ prefix: p, limit: 1000, cursor });
-      n += res.keys.length;
-      if (res.list_complete) break;
-      cursor = res.cursor;
-    }
-    remaining[p] = n;
+    const res = await kv.list({ prefix: p, limit: 1 });
+    empty[p] = res.keys.length === 0;
   }
-  return json({ ok: true, deleted, remaining });
+  return json({ ok: true, deletedNow, empty });
 }
 // ===== END TEMP-PURGE-BRAKE-KV =====
 
