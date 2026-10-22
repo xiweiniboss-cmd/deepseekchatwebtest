@@ -1100,13 +1100,13 @@ async function handleZhijiaScore(request, env) {
   if (!kv) return json({ error: '未启用' }, 503);
   let b = {};
   try { b = await request.json(); } catch (e) {}
-  const nickname = String(b.nickname || '').trim().slice(0, 12);
+  let nickname = String(b.nickname || '').trim().slice(0, 12);
   const device = String(b.device || '').slice(0, 64) || 'anon';
   const brakeTime = Number(b.brakeTime);
   const margin = Number(b.margin);
   const reaction = (b.reaction === null || b.reaction === undefined || isNaN(Number(b.reaction))) ? -1 : Number(b.reaction);
-  if (!nickname) return json({ error: '请先输入昵称' }, 400);
-  if (brakeHasSensitive(nickname)) return json({ error: '昵称包含敏感词，换一个吧' }, 400);
+  // 与 record 接口同口径：昵称为空或命中敏感词时不丢成绩，改记「无名车手」（菜单验名仍严格拦截，此处只兜底漏网情况）
+  if (!nickname || brakeHasSensitive(nickname)) nickname = '无名车手';
   if (!(brakeTime > 0 && brakeTime <= 30)) return json({ error: '数据异常' }, 400);
   if (!(margin >= 0 && margin <= 260)) return json({ error: '数据异常' }, 400);
   if (!(reaction >= -1 && reaction <= 30)) return json({ error: '数据异常' }, 400);
