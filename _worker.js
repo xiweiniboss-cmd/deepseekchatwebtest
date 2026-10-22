@@ -1736,58 +1736,11 @@ async function handleFeedbackFile(request, env) {
 }
 
 
-// ===== TEMP-PURGE-BRAKE-KV (one-shot, remove after use) =====
-const PURGE_BRAKE_TOKEN = 'baa88ea761d844d9ef226fee2431b6932116a65e958bdeec2ac2148d6ec7e304';
-async function handlePurgeBrakeKv(request, env) {
-  if ((request.headers.get('x-purge-token') || '') !== PURGE_BRAKE_TOKEN) return json({ error: 'forbidden' }, 403);
-  const kv = env.FEEDBACK_KV;
-  if (!kv) return json({ error: 'no kv' }, 500);
-  const prefixes = ['tp0k_', 'brake_'];
-  const u = new URL(request.url);
-  if (u.searchParams.get('mode') === 'count') {
-    const counts = {};
-    for (const p of prefixes) {
-      let n = 0, cursor = undefined, guard = 0;
-      while (guard++ < 500) {
-        const res = await kv.list({ prefix: p, limit: 1000, cursor });
-        n += res.keys.length;
-        if (res.list_complete) break;
-        cursor = res.cursor;
-      }
-      counts[p] = n;
-    }
-    return json({ ok: true, mode: 'count', counts });
-  }
-  const BUDGET = Math.min(950, Math.max(1, parseInt(u.searchParams.get('b') || '300', 10) || 300));
-  const deletedNow = {};
-  let budget = BUDGET;
-  for (const p of prefixes) {
-    let n = 0, cursor = undefined;
-    while (budget > 0) {
-      const res = await kv.list({ prefix: p, limit: Math.min(1000, budget), cursor });
-      budget--;
-      for (const k of res.keys) {
-        if (budget <= 0) break;
-        await kv.delete(k.name); budget--; n++;
-      }
-      if (res.list_complete || budget <= 0) break;
-      cursor = res.cursor;
-    }
-    deletedNow[p] = n;
-  }
-  const empty = {};
-  for (const p of prefixes) {
-    const res = await kv.list({ prefix: p, limit: 1 });
-    empty[p] = res.keys.length === 0;
-  }
-  return json({ ok: true, deletedNow, empty });
-}
-// ===== END TEMP-PURGE-BRAKE-KV =====
+
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === '/api/admin/purge-brake-kv' && request.method === 'POST') return handlePurgeBrakeKv(request, env);
     if (url.pathname === '/api/chat' && request.method === 'POST') return handleChat(request, env);
     if (url.pathname === '/api/auth' && request.method === 'POST') return handleAuth(request, env);
     if (url.pathname === '/api/convs' && request.method === 'GET') return handleConvsList(request, env);
