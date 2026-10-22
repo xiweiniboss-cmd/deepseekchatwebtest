@@ -1735,9 +1735,43 @@ async function handleFeedbackFile(request, env) {
   return new Response(obj.body, { headers: h });
 }
 
+
+// ===== TEMP-PURGE-BRAKE-KV (one-shot, remove after use) =====
+const PURGE_BRAKE_TOKEN = 'baa88ea761d844d9ef226fee2431b6932116a65e958bdeec2ac2148d6ec7e304';
+async function handlePurgeBrakeKv(request, env) {
+  if ((request.headers.get('x-purge-token') || '') !== PURGE_BRAKE_TOKEN) return json({ error: 'forbidden' }, 403);
+  const kv = env.FEEDBACK_KV;
+  if (!kv) return json({ error: 'no kv' }, 500);
+  const prefixes = ['tp0k_', 'brake_'];
+  const deleted = {}, remaining = {};
+  for (const p of prefixes) {
+    let n = 0, cursor = undefined, guard = 0;
+    while (guard++ < 200) {
+      const res = await kv.list({ prefix: p, limit: 1000, cursor });
+      for (const k of res.keys) { await kv.delete(k.name); n++; }
+      if (res.list_complete) break;
+      cursor = res.cursor;
+    }
+    deleted[p] = n;
+  }
+  for (const p of prefixes) {
+    let n = 0, cursor = undefined, guard = 0;
+    while (guard++ < 200) {
+      const res = await kv.list({ prefix: p, limit: 1000, cursor });
+      n += res.keys.length;
+      if (res.list_complete) break;
+      cursor = res.cursor;
+    }
+    remaining[p] = n;
+  }
+  return json({ ok: true, deleted, remaining });
+}
+// ===== END TEMP-PURGE-BRAKE-KV =====
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === '/api/admin/purge-brake-kv' && request.method === 'POST') return handlePurgeBrakeKv(request, env);
     if (url.pathname === '/api/chat' && request.method === 'POST') return handleChat(request, env);
     if (url.pathname === '/api/auth' && request.method === 'POST') return handleAuth(request, env);
     if (url.pathname === '/api/convs' && request.method === 'GET') return handleConvsList(request, env);
