@@ -1187,18 +1187,6 @@ async function handleZhijiaScore(request, env) {
   }
   return json({ score: score, best: newBest });
 }
-// [临时] D1 探针清理（删 d1probe 设备行）。验收后整段删除。
-const PROBE_TOKEN = '368f342010032d9405d6faefc85fa27eaa959ca9c7747b12';
-async function handleD1ProbeClean(request, env) {
-  if ((request.headers.get('x-probe-token') || '') !== PROBE_TOKEN) return json({ error: 'forbidden' }, 403);
-  const db = await zjDb(env);
-  if (!db) return json({ error: 'DB missing' }, 500);
-  await db.prepare("DELETE FROM zhijia_scores WHERE device LIKE 'd1probe%'").run();
-  await db.prepare("DELETE FROM zhijia_records WHERE d LIKE 'd1probe%'").run();
-  const c = await db.prepare('SELECT COUNT(*) AS c FROM zhijia_scores').first();
-  return json({ ok: true, scoresNow: c ? c.c : -1 });
-}
-
 async function handleZhijiaScore2(request, env) {
   let b = {};
   try { b = await request.json(); } catch (e) {}
@@ -2002,12 +1990,6 @@ export default {
     }
     if (url.pathname === '/api/zhijia/score2' && request.method === 'POST') {
       const br = await handleZhijiaScore2(request, env);
-      const bh = new Headers(br.headers);
-      bh.set('Access-Control-Allow-Origin', '*');
-      return new Response(br.body, { status: br.status, headers: bh });
-    }
-    if (url.pathname === '/api/admin/d1-probe-clean' && request.method === 'POST') {
-      const br = await handleD1ProbeClean(request, env);
       const bh = new Headers(br.headers);
       bh.set('Access-Control-Allow-Origin', '*');
       return new Response(br.body, { status: br.status, headers: bh });
