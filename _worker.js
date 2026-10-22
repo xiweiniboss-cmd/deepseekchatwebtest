@@ -1743,14 +1743,29 @@ async function handlePurgeBrakeKv(request, env) {
   const kv = env.FEEDBACK_KV;
   if (!kv) return json({ error: 'no kv' }, 500);
   const prefixes = ['tp0k_', 'brake_'];
-  const BUDGET = 300; // max KV ops per invocation (stay well under worker subrequest limits)
+  const u = new URL(request.url);
+  if (u.searchParams.get('mode') === 'count') {
+    const counts = {};
+    for (const p of prefixes) {
+      let n = 0, cursor = undefined, guard = 0;
+      while (guard++ < 500) {
+        const res = await kv.list({ prefix: p, limit: 1000, cursor });
+        n += res.keys.length;
+        if (res.list_complete) break;
+        cursor = res.cursor;
+      }
+      counts[p] = n;
+    }
+    return json({ ok: true, mode: 'count', counts });
+  }
+  const BUDGET = Math.min(950, Math.max(1, parseInt(u.searchParams.get('b') || '300', 10) || 300));
   const deletedNow = {};
   let budget = BUDGET;
   for (const p of prefixes) {
     let n = 0, cursor = undefined;
     while (budget > 0) {
       const res = await kv.list({ prefix: p, limit: Math.min(1000, budget), cursor });
-      budget--; // count the list op too
+      budget--;
       for (const k of res.keys) {
         if (budget <= 0) break;
         await kv.delete(k.name); budget--; n++;
