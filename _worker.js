@@ -1120,21 +1120,6 @@ async function zjBoardSetDb(env, device, name, brakeTime, margin, reaction, scor
     return !!(res && res.meta && res.meta.changes > 0);
   } catch (e) { return false; }
 }
-// [临时] 存量成绩一次性 +1612 归一化（与新公式对齐）。执行后整段删除。
-const BONUS_TOKEN = '573b24b760dd3ad9d32548c3d52254ab7f4555266d3c95c9';
-async function handleD1Bonus(request, env) {
-  if ((request.headers.get('x-bonus-token') || '') !== BONUS_TOKEN) return json({ error: 'forbidden' }, 403);
-  const db = await zjDb(env);
-  if (!db) return json({ error: 'DB missing' }, 500);
-  let b = {};
-  try { b = await request.json(); } catch (e) {}
-  if (String(b.action || '') !== 'bonus1612') return json({ error: 'unknown action' }, 400);
-  const before = await db.prepare('SELECT COUNT(*) AS c, COALESCE(SUM(s), 0) AS sum FROM zhijia_scores').first();
-  await db.prepare('UPDATE zhijia_scores SET s = s + 1612').run();
-  const after = await db.prepare('SELECT COUNT(*) AS c, COALESCE(SUM(s), 0) AS sum FROM zhijia_scores').first();
-  return json({ ok: true, before: before, after: after });
-}
-
 async function handleZhijiaLeaderboard(request, env) {
   const url = new URL(request.url);
   const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 1), 100);
@@ -1956,12 +1941,6 @@ export default {
     }
     if (url.pathname === '/api/zhijia/record' && request.method === 'POST') {
       const br = await handleZhijiaRecord(request, env);
-      const bh = new Headers(br.headers);
-      bh.set('Access-Control-Allow-Origin', '*');
-      return new Response(br.body, { status: br.status, headers: bh });
-    }
-    if (url.pathname === '/api/admin/d1-bonus' && request.method === 'POST') {
-      const br = await handleD1Bonus(request, env);
       const bh = new Headers(br.headers);
       bh.set('Access-Control-Allow-Origin', '*');
       return new Response(br.body, { status: br.status, headers: bh });
