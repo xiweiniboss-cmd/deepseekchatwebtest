@@ -1151,15 +1151,36 @@ async function zhijiaBoardGet(kv, limit) {
   board.sort(function (a, b) { return b.s - a.s; });
   return board.slice(0, limit || 50);
 }
+async function zjBoardSetDb(env, device, name, brakeTime, margin, reaction, score, ts, ip) {
+  const db = await zjDb(env);
+  if (!db || !device) return false;
+  try {
+    try {
+      const kv = env.FEEDBACK_KV;
+      if (kv) {
+        const wkey = 'zhijia_bw_' + Math.floor(Date.now() / 60000) + '_' + String(ip || '').replace(/[^a-zA-Z0-9.:]/g, '').slice(0, 45);
+        const wn = (parseInt(await kv.get(wkey) || '0', 10) || 0) + 1;
+        if (wn > 20) return false;
+        await kv.put(wkey, String(wn), { expirationTtl: 75 });
+      }
+    } catch (e) {}
+    const res = await db.prepare('INSERT INTO zhijia_scores (device, n, t, m, r, s, ts, ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(device) DO UPDATE SET n = excluded.n, t = excluded.t, m = excluded.m, r = excluded.r, s = excluded.s, ts = excluded.ts, ip = excluded.ip WHERE excluded.s > zhijia_scores.s').bind(zjDev(device), name, brakeTime, margin, reaction, score, ts, ip || '').run();
+    return !!(res && res.meta && res.meta.changes > 0);
+  } catch (e) { return false; }
+}
 async function handleZhijiaLeaderboard(request, env) {
-  const kv = env.FEEDBACK_KV;
   const url = new URL(request.url);
   const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 1), 100);
-  let board = [];
-  try { board = await zhijiaBoardGet(kv, limit); } catch (e) {}
-  const entries = board.map(function (e) {
-    return { nickname: String(e.n || '无名车手').slice(0, 12), brakeTime: +e.t || 0, margin: +e.m || 0, score: e.s | 0 };
-  });
+  let entries = [];
+  try {
+    const db = await zjDb(env);
+    if (db) {
+      const res = await db.prepare('SELECT n, t, m, s FROM zhijia_scores ORDER BY s DESC LIMIT ?').bind(limit).all();
+      entries = (res.results || []).map(function (e) {
+        return { nickname: String(e.n || '无名车手').slice(0, 12), brakeTime: +e.t || 0, margin: +e.m || 0, score: e.s | 0 };
+      });
+    }
+  } catch (e) {}
   return json({ entries: entries });
 }
 async function handleZhijiaScore(request, env) {
@@ -1179,11 +1200,6 @@ async function handleZhijiaScore(request, env) {
   if (!(reaction >= -1 && reaction <= 30)) return json({ error: '数据异常' }, 400);
   const score = Math.round(100000 / brakeTime);
   if (!(score > 0 && score <= 200000)) return json({ error: '数据异常' }, 400);
-  try {
-    if ((await kv.get('tp0k_write_ok')) !== '1') {
-      return json({ error: '暂时无法同步至服务器，请等待明早八点后再试' }, 503);
-    }
-  } catch (e) {}
   const ip = request.headers.get('cf-connecting-ip') || '';
   if (ip) {
     let counted = false;
@@ -1195,13 +1211,16 @@ async function handleZhijiaScore(request, env) {
   const now = Date.now();
   let best = 0;
   try {
-    const raw = await kv.get(zhijiaBestKey(device));
-    if (raw) { try { const ex = JSON.parse(raw); if (ex && typeof ex.s === 'number') best = ex.s; } catch (e2) {} }
+    const db = await zjDb(env);
+    if (db) {
+      const row = await db.prepare('SELECT s FROM zhijia_scores WHERE device = ?').bind(zjDev(device)).first();
+      if (row && typeof row.s === 'number') best = row.s;
+    }
   } catch (e) {}
   const newBest = Math.max(best, score);
   if (score > best) {
     let ok = false;
-    try { ok = await zhijiaBoardSet(kv, device, nickname, brakeTime, margin, reaction, score, now, ip); } catch (e) {}
+    try { ok = await zjBoardSetDb(env, device, nickname, brakeTime, margin, reaction, score, now, ip); } catch (e) {}
     if (!ok) return json({ error: '暂时无法同步服务器，成绩未能保存，请稍后再试' }, 503);
   }
   return json({ score: score, best: newBest });
@@ -1231,7 +1250,9 @@ async function handleZhijiaRecord(request, env) {
   const key = 'zhijia_rec_' + now.toString(36) + '_' + Math.random().toString(36).slice(2, 8);
   const rec = { n: nickname, d: device, mode: mode, result: result, t: brakeTime, r: reaction, f: maxForce, v: maxSpeed, m: margin, ts: now, ip: ip };
   try {
-    await kv.put(key, JSON.stringify(rec));
+    const db = await zjDb(env);
+    if (!db) throw new Error('no db');
+    await db.prepare('INSERT INTO zhijia_records (rkey, n, d, mode, result, t, r, f, v, m, ts, ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(key, rec.n, rec.d, rec.mode, rec.result, rec.t, rec.r, rec.f, rec.v, rec.m, rec.ts, rec.ip).run();
   } catch (e) {
     return json({ error: '暂时无法同步服务器，记录未能保存' }, 503);
   }
@@ -1268,9 +1289,14 @@ async function zhijiaRecordsGet(kv, limit) {
 }
 async function handleAdminZhijiaBoard(request, env) {
   if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
-  const kv = env.FEEDBACK_KV;
   let board = [];
-  try { board = await zhijiaBoardGet(kv, 1000); } catch (e) {}
+  try {
+    const db = await zjDb(env);
+    if (db) {
+      const res = await db.prepare('SELECT device, n, t, m, r, s, ts, ip FROM zhijia_scores ORDER BY s DESC LIMIT 1000').all();
+      board = (res.results || []).map(function (e) { return { n: e.n, d: e.device, t: e.t, m: e.m, r: e.r, s: e.s, ts: e.ts, ip: e.ip }; });
+    }
+  } catch (e) {}
   const out = board.map(function (e) {
     return { n: String(e.n || '无名车手').slice(0, 12), d: String(e.d || ''), t: +e.t || 0, m: +e.m || 0, r: (typeof e.r === 'number' ? e.r : -1), s: e.s | 0, ts: +e.ts || 0, ip: String(e.ip || '') };
   });
@@ -1283,31 +1309,27 @@ async function handleAdminZhijiaDeleteEntry(request, env) {
   try { b = await request.json(); } catch (e) {}
   const device = String(b.device || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
   if (!device) return json({ ok: false, error: '缺少设备' }, 400);
-  try { if (kv) await kv.delete(zhijiaBestKey(device)); } catch (e) {}
+  try { const db = await zjDb(env); if (db) await db.prepare('DELETE FROM zhijia_scores WHERE device = ?').bind(device).run(); } catch (e) {}
   return json({ ok: true });
 }
 async function handleAdminZhijiaReset(request, env) {
   if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
-  const kv = env.FEEDBACK_KV;
   try {
-    if (kv) {
-      let cursor = undefined;
-      do {
-        const res = await kv.list({ prefix: 'zhijia_best_', cursor: cursor, limit: 1000 });
-        if (res && res.keys) {
-          await Promise.all(res.keys.map(function (k) { return kv.delete(k.name); }));
-        }
-        cursor = res && !res.list_complete ? res.cursor : undefined;
-      } while (cursor);
-    }
+    const db = await zjDb(env);
+    if (db) await db.prepare('DELETE FROM zhijia_scores').run();
   } catch (e) {}
   return json({ ok: true });
 }
 async function handleAdminZhijiaRecords(request, env) {
   if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
-  const kv = env.FEEDBACK_KV;
   let recs = [];
-  try { recs = await zhijiaRecordsGet(kv, 200); } catch (e) {}
+  try {
+    const db = await zjDb(env);
+    if (db) {
+      const res = await db.prepare('SELECT rkey, n, mode, result, t, r, f, v, m, ts, ip FROM zhijia_records ORDER BY ts DESC LIMIT 200').all();
+      recs = (res.results || []).map(function (e) { return { key: e.rkey, n: e.n, mode: e.mode, result: e.result, t: e.t, r: e.r, f: e.f, v: e.v, m: e.m, ts: e.ts, ip: e.ip }; });
+    }
+  } catch (e) {}
   const out = recs.map(function (e) {
     return { key: String(e.key || ''), n: String(e.n || '无名车手').slice(0, 12), mode: String(e.mode || ''), result: String(e.result || ''), t: +e.t || 0, r: (typeof e.r === 'number' ? e.r : -1), f: +e.f || 0, v: +e.v || 0, m: +e.m || 0, ts: +e.ts || 0, ip: String(e.ip || '') };
   });
@@ -1321,23 +1343,14 @@ async function handleAdminZhijiaDeleteRecord(request, env) {
   try { b = await request.json(); } catch (e) {}
   const key = String(b.key || '');
   if (key.indexOf('zhijia_rec_') !== 0) return json({ ok: false, error: '记录不存在' }, 400);
-  try { if (kv) await kv.delete(key); } catch (e) {}
+  try { const db = await zjDb(env); if (db) await db.prepare('DELETE FROM zhijia_records WHERE rkey = ?').bind(key).run(); } catch (e) {}
   return json({ ok: true });
 }
 async function handleAdminZhijiaClearRecords(request, env) {
   if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
-  const kv = env.FEEDBACK_KV;
   try {
-    if (kv) {
-      let cursor = undefined;
-      do {
-        const res = await kv.list({ prefix: 'zhijia_rec_', cursor: cursor, limit: 1000 });
-        if (res && res.keys) {
-          await Promise.all(res.keys.map(function (k) { return kv.delete(k.name); }));
-        }
-        cursor = res && !res.list_complete ? res.cursor : undefined;
-      } while (cursor);
-    }
+    const db = await zjDb(env);
+    if (db) await db.prepare('DELETE FROM zhijia_records').run();
   } catch (e) {}
   return json({ ok: true });
 }
