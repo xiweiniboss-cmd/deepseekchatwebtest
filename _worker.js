@@ -1042,6 +1042,73 @@ async function handleAdminTp0kClearRecords(request, env) {
   return json({ ok: true });
 }
 
+
+// ---------- 智驾 D1 存储（2026-10-23 从 KV 迁移；绑定名 DB） ----------
+const ZJ_SCORES_SQL = 'CREATE TABLE IF NOT EXISTS zhijia_scores (device TEXT PRIMARY KEY, n TEXT, t REAL, m REAL, r REAL, s INTEGER, ts INTEGER, ip TEXT)';
+const ZJ_RECORDS_SQL = 'CREATE TABLE IF NOT EXISTS zhijia_records (rkey TEXT PRIMARY KEY, n TEXT, d TEXT, mode TEXT, result TEXT, t REAL, r REAL, f REAL, v REAL, m REAL, ts INTEGER, ip TEXT)';
+let zjDbReady = false;
+async function zjDb(env) {
+  const db = env.DB;
+  if (!db) return null;
+  if (!zjDbReady) {
+    await db.prepare(ZJ_SCORES_SQL).run();
+    await db.prepare(ZJ_RECORDS_SQL).run();
+    zjDbReady = true;
+  }
+  return db;
+}
+function zjDev(device) {
+  return String(device || 'anon').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
+}
+
+// [临时] D1 迁移接口：ping 建表 / migrate 搬 KV 存量 / probe-clean 清测试行。迁移完成后整段删除。
+const MIG_TOKEN = '9103b842523139a7eaadbd25a5dd235702110286494cca8d';
+async function handleD1Migrate(request, env) {
+  if ((request.headers.get('x-mig-token') || '') !== MIG_TOKEN) return json({ error: 'forbidden' }, 403);
+  if (!env.DB) return json({ error: 'DB binding missing' }, 500);
+  let b = {};
+  try { b = await request.json(); } catch (e) {}
+  const action = String(b.action || 'ping');
+  const db = await zjDb(env);
+  if (!db) return json({ error: 'DB init failed' }, 500);
+  if (action === 'ping') {
+    const c1 = await db.prepare('SELECT COUNT(*) AS c FROM zhijia_scores').first();
+    const c2 = await db.prepare('SELECT COUNT(*) AS c FROM zhijia_records').first();
+    return json({ ok: true, db: true, scores: c1 ? c1.c : -1, records: c2 ? c2.c : -1 });
+  }
+  if (action === 'migrate') {
+    const kv = env.FEEDBACK_KV;
+    if (!kv) return json({ error: 'KV missing' }, 500);
+    let ns = 0, nr = 0;
+    const board = await zhijiaBoardGet(kv, 100000);
+    const stmts = [];
+    for (const e of board) {
+      const dev = zjDev(e.d);
+      if (!dev) continue;
+      stmts.push(db.prepare('INSERT OR REPLACE INTO zhijia_scores (device, n, t, m, r, s, ts, ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(dev, String(e.n || '无名车手').slice(0, 12), +e.t || 0, +e.m || 0, (typeof e.r === 'number' ? e.r : -1), e.s | 0, +e.ts || 0, String(e.ip || '')));
+    }
+    for (let i = 0; i < stmts.length; i += 50) await db.batch(stmts.slice(i, i + 50));
+    ns = stmts.length;
+    const recs = await zhijiaRecordsGet(kv, 100000);
+    const rstmts = [];
+    for (const e of recs) {
+      if (!e.key) continue;
+      rstmts.push(db.prepare('INSERT OR IGNORE INTO zhijia_records (rkey, n, d, mode, result, t, r, f, v, m, ts, ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(String(e.key), String(e.n || '无名车手').slice(0, 12), String(e.d || ''), String(e.mode || ''), String(e.result || ''), +e.t || 0, (typeof e.r === 'number' ? e.r : -1), +e.f || 0, +e.v || 0, +e.m || 0, +e.ts || 0, String(e.ip || '')));
+    }
+    for (let i = 0; i < rstmts.length; i += 50) await db.batch(rstmts.slice(i, i + 50));
+    nr = rstmts.length;
+    const c1 = await db.prepare('SELECT COUNT(*) AS c FROM zhijia_scores').first();
+    const c2 = await db.prepare('SELECT COUNT(*) AS c FROM zhijia_records').first();
+    return json({ ok: true, migratedScores: ns, migratedRecords: nr, scoresNow: c1 ? c1.c : -1, recordsNow: c2 ? c2.c : -1 });
+  }
+  if (action === 'probe-clean') {
+    await db.prepare("DELETE FROM zhijia_scores WHERE device LIKE 'd1probe%'").run();
+    await db.prepare("DELETE FROM zhijia_records WHERE d LIKE 'd1probe%'").run();
+    return json({ ok: true, cleaned: true });
+  }
+  return json({ error: 'unknown action' }, 400);
+}
+
 // ---------- 智驾接管模拟器：记录 / 排行榜 / 后台 ----------
 // 排行榜只收困难模式（遥遥领先）胜利局；得分 = round(100000 / 刹车用时秒)，用时越短分越高
 function zhijiaBestKey(device) {
@@ -1908,6 +1975,12 @@ export default {
     }
     if (url.pathname === '/api/zhijia/record' && request.method === 'POST') {
       const br = await handleZhijiaRecord(request, env);
+      const bh = new Headers(br.headers);
+      bh.set('Access-Control-Allow-Origin', '*');
+      return new Response(br.body, { status: br.status, headers: bh });
+    }
+    if (url.pathname === '/api/admin/d1-migrate' && request.method === 'POST') {
+      const br = await handleD1Migrate(request, env);
       const bh = new Headers(br.headers);
       bh.set('Access-Control-Allow-Origin', '*');
       return new Response(br.body, { status: br.status, headers: bh });
