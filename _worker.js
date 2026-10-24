@@ -25,43 +25,38 @@ async function sha256(str) {
 }
 function validUsername(u){ return /^[a-zA-Z]{1,8}$/.test(u); }
 function validPassword(p){ return /^[0-9]{1,10}$/.test(p); }
-// Tavily 联网搜索（专为 LLM 设计）：新闻 + 网页双通道，失败返回 null
-async function tavilySearch(query, apiKey) {
-  async function callApi(topic, timeRange) {
-    try {
-      const r = await fetch('https://api.tavily.com/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
-        body: JSON.stringify({
-          query: query,
-          topic: topic,
-          max_results: 5,
-          search_depth: 'basic',
-          include_answer: false,
-          include_raw_content: false,
-          ...(timeRange ? { time_range: timeRange } : {}),
-        }),
-      });
-      if (!r.ok) return [];
-      const j = await r.json();
-      return j.results || [];
-    } catch(e){ return []; }
-  }
-  const news = await callApi('news', 'month');
-  const web = await callApi('general', null);
-  const seen = {};
-  const all = news.concat(web).filter(function(it){
-    const u = String(it.url || '');
-    if (!u || !it.title) return false;
-    const key = u.split('?')[0].toLowerCase();
-    if (seen[key]) return false;
-    seen[key] = 1;
-    return true;
-  }).slice(0, 8);
-  if (!all.length) return '（未搜到有效结果）';
-  return all.map(function(it, i){
-    return '[' + (i+1) + '] ' + (it.title || '') + '\n' + String(it.content || '').slice(0, 400) + '\n来源：' + (it.url || '');
-  }).join('\n\n');
+// DeepSeek 官方联网搜索：与对话共用 DEEPSEEK_API_KEY，失败返回 null
+async function deepseekSearch(query, apiKey) {
+  try {
+    const r = await fetch('https://api.deepseek.com/v1/tools/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+      body: JSON.stringify({
+        query: query,
+        ori_question: query,
+        count: 8,
+        need_content: false,
+      }),
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const results = j.results || [];
+    if (!results.length) return '（未搜到有效结果）';
+    const seen = {};
+    const all = results.filter(function(it){
+      const u = String(it.url || '');
+      if (!u || !it.title) return false;
+      const key = u.split('?')[0].toLowerCase();
+      if (seen[key]) return false;
+      seen[key] = 1;
+      return true;
+    }).slice(0, 8);
+    if (!all.length) return '（未搜到有效结果）';
+    return all.map(function(it, i){
+      const text = (it.summary || it.snippet || '');
+      return '[' + (i+1) + '] ' + (it.title || '') + '\n' + String(text).slice(0, 400) + '\n来源：' + (it.url || '');
+    }).join('\n\n');
+  } catch(e){ return null; }
 }
 function randToken(){
   const a = new Uint8Array(24);
@@ -435,10 +430,8 @@ async function handleChat(request, env) {
     }
     if (brakeHasSensitive(lastText)) return json({ ok: false, error: '消息包含敏感词，请修改后重试' }, 400);
   }
-  // 联网搜索：用 Brave Search 搜最新信息，注入到最后一条用户消息
+  // 联网搜索：用 DeepSeek 官方搜索搜最新信息，注入到最后一条用户消息（与对话共用 DEEPSEEK_API_KEY）
   if (body.websearch === true) {
-    const tavilyKey = (env.TAVILY_API_KEY || '').trim();
-    if (!tavilyKey) return json({ ok: false, error: '联网搜索未配置：请在 Cloudflare Pages → Settings → Environment variables 添加 TAVILY_API_KEY（去 tavily.com 免费注册，每月1000次免费）' }, 500);
     let q = '';
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === 'user') {
@@ -447,9 +440,9 @@ async function handleChat(request, env) {
         break;
       }
     }
-    q = q.trim().slice(0, 300);
+    q = q.trim().slice(0, 128);
     if (!q) return json({ ok: false, error: '消息为空' }, 400);
-    const sr = await tavilySearch(q, tavilyKey);
+    const sr = await deepseekSearch(q, apiKey);
     if (!sr) return json({ ok: false, error: '联网搜索失败，请稍后重试' }, 502);
     const today = new Date().toISOString().slice(0, 10);
     const ctx = '\n\n【联网搜索结果（' + today + '）】\n' + sr + '\n【要求】请结合以上最新搜索结果回答用户问题，引用信息时标注来源序号。';
