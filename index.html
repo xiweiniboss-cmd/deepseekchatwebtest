@@ -148,7 +148,7 @@ header .hact{ margin-left:auto; display:flex; align-items:center; gap:6px; flex:
 #chat{ padding-top:14px; }
 .msg{ box-shadow:0 4px 14px rgba(0,0,0,.18); }
 .msg.ai{ border:1px solid rgba(255,255,255,.05); }
-#fbBtn{ top:auto; bottom:calc(150px + env(safe-area-inset-bottom)); right:12px; width:44px; height:44px; font-size:20px; opacity:.88; box-shadow:0 6px 16px rgba(77,107,254,.4); }
+#fbBtn{ top:auto; bottom:calc(210px + env(safe-area-inset-bottom)); right:12px; width:44px; height:44px; font-size:20px; opacity:.88; box-shadow:0 6px 16px rgba(77,107,254,.4); }
 #inputBar{ padding:8px 12px calc(10px + env(safe-area-inset-bottom)); background:rgba(15,15,19,.85); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); border-top:1px solid rgba(255,255,255,.06); }
 #toolRow{ gap:8px; margin-bottom:8px; align-items:center; }
 #thinkBox{ padding:6px 12px 4px; border-radius:12px; background:rgba(255,255,255,.05); border-color:rgba(255,255,255,.08); }
@@ -167,6 +167,12 @@ header .hact{ margin-left:auto; display:flex; align-items:center; gap:6px; flex:
 #input{ border-radius:22px; padding:11px 16px; min-height:44px; font-size:15px; background:rgba(255,255,255,.06); border-color:rgba(255,255,255,.08); }
 #imgBtn{ flex:0 0 44px; height:44px; border-radius:50%; font-size:18px; background:rgba(255,255,255,.06); border-color:rgba(255,255,255,.08); }
 #sendBtn{ flex:0 0 44px; height:44px; border-radius:50%; font-size:17px; box-shadow:0 4px 12px rgba(77,107,254,.4); }
+#imgBtn{ display:grid; place-items:center; color:var(--muted); padding:0; transition:color .15s, background .15s, opacity .15s; }
+#imgBtn:not(.off):active, #imgBtn.has{ color:#fff; background:var(--acc); border-color:transparent; }
+#imgBtn.off{ opacity:.35; }
+#imgPreview{ padding-left:52px; }
+#imgPrevImg{ border:1px solid rgba(255,255,255,.12); }
+#imgRemove{ left:auto !important; right:auto; margin-left:-12px; }
 #sendBtn:active, #imgBtn:active{ transform:scale(.94); }
 .act-btn{ border-radius:999px; padding:4px 11px; }
 body::after{content:"";position:fixed;inset:0;background:var(--bgimg,url('/bg.jpg')) center/cover no-repeat;opacity:.25;pointer-events:none;z-index:2147483647}</style>
@@ -202,7 +208,7 @@ body::after{content:"";position:fixed;inset:0;background:var(--bgimg,url('/bg.jp
     <div id="webBox"><span>🌐</span><span class="webLabel">联网搜索</span><span id="webSwitch" class="switch"><span class="knob"></span></span></div>
   </div>
   <div id="inputWrap">
-    <button id="imgBtn" title="上传图片">🖼</button>
+    <button id="imgBtn" title="上传图片（仅 Flash 可看图）" aria-label="上传图片"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="15" height="14" rx="3"/><circle cx="8" cy="9" r="1.6"/><path d="M3.5 16l4.2-4.2a1.5 1.5 0 0 1 2.1 0L15 17"/><path d="M19.5 3v5M17 5.5h5"/></svg></button>
     <textarea id="input" rows="1" placeholder="输入消息…"></textarea>
     <button id="sendBtn">➤</button>
   </div>
@@ -410,6 +416,7 @@ function syncThinkUI(){
   var ts = document.querySelectorAll('#effortTicks span');
   for (var i = 0; i < ts.length; i++) ts[i].classList.toggle('on', i === effortIdx);
   $('modelSel').value = effortIdx === 0 ? 'deepseek-v4-flash' : 'deepseek-v4-pro';
+  $('imgBtn').classList.toggle('off', effortIdx !== 0);
   $('webSwitch').classList.toggle('on', webOn);
   $('webBox').classList.toggle('on', webOn);
   setEffortBg();
@@ -429,8 +436,11 @@ $('webSwitch').onclick = function(){
 syncThinkUI();
 // 图片上传（仅 deepseek-v4-flash 支持看图）
 var pendingImage = null; // dataURL
-$('imgBtn').onclick = function(){ $('imgInput').click(); };
-$('imgRemove').onclick = function(){ pendingImage = null; $('imgPreview').style.display = 'none'; $('imgInput').value = ''; };
+$('imgBtn').onclick = function(){
+  if (this.classList.contains('off')) { fbToast('当前推理模式用的是 Pro，不能看图；把推理等级拖到「关闭」就能传图'); return; }
+  $('imgInput').click();
+};
+$('imgRemove').onclick = function(){ $('imgBtn').classList.remove('has'); pendingImage = null; $('imgPreview').style.display = 'none'; $('imgInput').value = ''; };
 $('imgInput').onchange = function(){
   var f = this.files[0];
   if (!f) return;
@@ -449,6 +459,7 @@ $('imgInput').onchange = function(){
       pendingImage = c.toDataURL('image/jpeg', 0.85);
       $('imgPrevImg').src = pendingImage;
       $('imgPreview').style.display = 'block';
+      $('imgBtn').classList.add('has');
     };
     img.src = rd.result;
   };
@@ -468,7 +479,7 @@ async function send(){
   var text = $('input').value.trim();
   if (!text || sending) return;
   var imgData = pendingImage;
-  pendingImage = null; $('imgPreview').style.display = 'none'; $('imgInput').value = '';
+  pendingImage = null; $('imgPreview').style.display = 'none'; $('imgInput').value = ''; $('imgBtn').classList.remove('has');
   var useVision = imgData && $('modelSel').value === 'deepseek-v4-flash';
   if (imgData && !useVision) { showErr('当前模型不支持看图，已忽略图片'); imgData = null; }
   var userContent;
