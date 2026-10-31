@@ -377,6 +377,21 @@ async function handleAdminDeleteUser(request, env){
 // ---------- DeepSeek 聊天代理 ----------
 // ---------- DeepSeek 聊天代理 ----------
 
+// 模型与推理等级相互独立（Flash 和 Pro 都支持 关闭/小难梁/梁子/梁圣）：
+//   model 只认白名单 flash/pro（其它一律按 flash）；
+//   effort=off → thinking disabled；low/high/max → thinking enabled + reasoning_effort（两个模型均支持 low/high/max，见 api-docs.deepseek.com/guides/thinking_mode）
+//   不带 effort 的旧版前端：按 model 走，思考模式用 API 默认（enabled/high）
+// MODEL_EFFORT_BEGIN
+function resolveModelEffort(body) {
+  const b = body || {};
+  const model = b.model === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
+  const eff = b.effort;
+  if (eff === 'off') return { model, thinking: { type: 'disabled' }, reasoningEffort: null };
+  if (eff === 'low' || eff === 'high' || eff === 'max') return { model, thinking: { type: 'enabled' }, reasoningEffort: eff };
+  return { model, thinking: { type: 'enabled' }, reasoningEffort: null };
+}
+// MODEL_EFFORT_END
+
 async function handleChat(request, env) {
  try {
   const bl = await isBlacklisted(request, env);
@@ -402,17 +417,7 @@ async function handleChat(request, env) {
   }
   const apiKey = (env.DEEPSEEK_API_KEY || '').trim();
   if (!apiKey) return json({ ok: false, error: '未配置 DeepSeek API Key：请在 Cloudflare Pages → Settings → Environment variables 添加 DEEPSEEK_API_KEY（重新部署后生效）' }, 500);
-  // 推理等级：off→Flash真·不思考；low/high/max→Pro+对应强度；不带effort的旧版前端按model走
-  const eff = body.effort;
-  let model = 'deepseek-v4-flash';
-  let thinking = { type: 'enabled' };
-  let reasoningEffort = null;
-  if (eff === 'off' || eff === 'low' || eff === 'high' || eff === 'max') {
-    if (eff === 'off') { model = 'deepseek-v4-flash'; thinking = { type: 'disabled' }; }
-    else { model = 'deepseek-v4-pro'; thinking = { type: 'enabled' }; reasoningEffort = eff; }
-  } else {
-    model = body.model === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
-  }
+  const { model, thinking, reasoningEffort } = resolveModelEffort(body);
   try { if (kv) await kv.put('umodel_' + username, model, { expirationTtl: 90*24*3600 }); } catch(e){}
   const messages = Array.isArray(body.messages) ? body.messages.slice(-30) : [];
   if (!messages.length || !messages.some(function(m){ return m.role === 'user'; }))
@@ -462,7 +467,9 @@ async function handleChat(request, env) {
         if (p.type === 'text') parts.push({ type: 'text', text: String(p.text || '').slice(0, 20000) });
         else if (p.type === 'image_url' && p.image_url && typeof p.image_url.url === 'string') {
           const u = p.image_url.url;
-          if (u.startsWith('data:image/') && u.length < 7*1024*1024) parts.push({ type: 'image_url', image_url: { url: u } });
+          if (!(u.startsWith('data:image/') && u.length < 7*1024*1024)) continue;
+          if (model === 'deepseek-v4-pro') parts.push({ type: 'text', text: '[图片：Pro 不能看图，已省略]' });
+          else parts.push({ type: 'image_url', image_url: { url: u } });
         }
       }
       return { role, content: parts.length ? parts : [{ type: 'text', text: '(空)' }] };

@@ -401,11 +401,17 @@ function setEffortBg(){
 }
 // 预加载三档背景图，切换不闪
 EFFORT_BGS.forEach(function(b){ if (b) { var im = new Image(); im.src = b; } });
-var effortIdx = 0, webOn = false;
+// 模型与推理等级相互独立：下拉框选模型（存 ds_model），滑杆选推理等级（存 ds_effort），互不联动
+var MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'];
+var effortIdx = 0, webOn = false, curModel = 'deepseek-v4-flash';
 try {
   var se = localStorage.getItem('ds_effort');
   if (se) { for (var ei = 0; ei < EFFORTS.length; ei++) if (EFFORTS[ei].k === se) effortIdx = ei; }
   else if (localStorage.getItem('ds_think') === '0') { effortIdx = 0; }
+  var sm = localStorage.getItem('ds_model');
+  if (MODELS.indexOf(sm) >= 0) curModel = sm;
+  // 旧版迁移：以前推理等级>关闭就是 Pro，关闭就是 Flash —— 保持原来的模型不变
+  else curModel = effortIdx > 0 ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
   webOn = localStorage.getItem('ds_web') === '1';
 } catch(e){}
 function syncThinkUI(){
@@ -416,11 +422,16 @@ function syncThinkUI(){
   s.style.setProperty('--trackbg', 'linear-gradient(90deg,#6d28d9 0%,#4a9eff ' + p + '%,#2c2c36 ' + p + '%)');
   var ts = document.querySelectorAll('#effortTicks span');
   for (var i = 0; i < ts.length; i++) ts[i].classList.toggle('on', i === effortIdx);
-  $('modelSel').value = effortIdx === 0 ? 'deepseek-v4-flash' : 'deepseek-v4-pro';
-  $('imgBtn').classList.toggle('off', effortIdx !== 0);
+  $('modelSel').value = curModel;
+  $('imgBtn').classList.toggle('off', curModel !== 'deepseek-v4-flash');
   $('webSwitch').classList.toggle('on', webOn);
   $('webBox').classList.toggle('on', webOn);
   setEffortBg();
+}
+function setModel(m){
+  curModel = MODELS.indexOf(m) >= 0 ? m : 'deepseek-v4-flash';
+  try { localStorage.setItem('ds_model', curModel); } catch(e){}
+  syncThinkUI();
 }
 function setEffort(i){
   effortIdx = i;
@@ -438,7 +449,7 @@ syncThinkUI();
 // 图片上传（仅 deepseek-v4-flash 支持看图）
 var pendingImage = null; // dataURL
 $('imgBtn').onclick = function(){
-  if (this.classList.contains('off')) { fbToast('当前推理模式用的是 Pro，不能看图；把推理等级拖到「关闭」就能传图'); return; }
+  if (this.classList.contains('off')) { fbToast('Pro 不能看图，把模型换成 Flash 就能传图'); return; }
   $('imgInput').click();
 };
 $('imgRemove').onclick = function(){ $('imgBtn').classList.remove('has'); pendingImage = null; $('imgPreview').style.display = 'none'; $('imgInput').value = ''; };
@@ -466,11 +477,11 @@ $('imgInput').onchange = function(){
   };
   rd.readAsDataURL(f);
 };
-// 顶部模型下拉框反向同步到滑杆：flash→关闭，pro→梁子
+// 顶部模型下拉框只切换模型，不动推理等级滑杆
 $('modelSel').onchange = function(){
-  setEffort(this.value === 'deepseek-v4-pro' ? 2 : 0);
-  if (this.value === 'deepseek-v4-pro' && pendingImage) {
-    alert('Pro 模型不支持看图，图片将被忽略（把推理等级拖到"关闭"可看图）');
+  setModel(this.value);
+  if (curModel === 'deepseek-v4-pro' && pendingImage) {
+    alert('Pro 模型不支持看图，图片将被忽略（把模型换成 Flash 就能看图）');
   }
 };
 function stopGen(){
@@ -482,7 +493,7 @@ async function send(){
   var imgData = pendingImage;
   pendingImage = null; $('imgPreview').style.display = 'none'; $('imgInput').value = ''; $('imgBtn').classList.remove('has');
   var useVision = imgData && $('modelSel').value === 'deepseek-v4-flash';
-  if (imgData && !useVision) { showErr('当前模型不支持看图，已忽略图片'); imgData = null; }
+  if (imgData && !useVision) { showErr('Pro 不能看图，已忽略图片（把模型换成 Flash 就能传图）'); imgData = null; }
   var userContent;
   if (useVision) {
     userContent = [ { type:'text', text:text }, { type:'image_url', image_url:{ url: imgData } } ];
