@@ -411,7 +411,7 @@ try {
   var sm = localStorage.getItem('ds_model');
   if (MODELS.indexOf(sm) >= 0) curModel = sm;
   // 旧版迁移：以前推理等级>关闭就是 Pro，关闭就是 Flash —— 保持原来的模型不变
-  else curModel = effortIdx > 0 ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
+  else { curModel = effortIdx > 0 ? 'deepseek-v4-pro' : 'deepseek-v4-flash'; localStorage.setItem('ds_model', curModel); }
   webOn = localStorage.getItem('ds_web') === '1';
 } catch(e){}
 function syncThinkUI(){
