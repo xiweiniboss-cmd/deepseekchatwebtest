@@ -12,7 +12,7 @@
 
   /* ================= 可调参数（每项改一行即可） ================= */
   var WELCOME_NAME   = '博士';            // 欢迎语里的称呼：「欢迎 博士 访问」
-  var PLAY_MODE      = 'daily';           // 'daily' 每天一次 | 'always' 每次都播 | 'off' 关闭
+  var PLAY_MODE      = 'always';          // 'daily' 每天一次 | 'always' 每次都播 | 'off' 关闭
   var STORAGE_KEY    = 'ds_splash_day';   // localStorage 键，值为当天日期 YYYY-MM-DD
   var BRAND          = 'DEEPSEEK';
   var BRAND_SUB      = 'SYNTHESIZE INTELLIGENCE';
