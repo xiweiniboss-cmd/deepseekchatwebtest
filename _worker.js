@@ -417,7 +417,7 @@ async function handleChat(request, env) {
   }
   const apiKey = (env.DEEPSEEK_API_KEY || '').trim();
   if (!apiKey) return json({ ok: false, error: '未配置 DeepSeek API Key：请在 Cloudflare Pages → Settings → Environment variables 添加 DEEPSEEK_API_KEY（重新部署后生效）' }, 500);
-  const { model, thinking, reasoningEffort } = resolveModelEffort(body);
+  let { model, thinking, reasoningEffort } = resolveModelEffort(body);
   try { if (kv) await kv.put('umodel_' + username, model, { expirationTtl: 90*24*3600 }); } catch(e){}
   const messages = Array.isArray(body.messages) ? body.messages.slice(-30) : [];
   if (!messages.length || !messages.some(function(m){ return m.role === 'user'; }))
@@ -480,6 +480,9 @@ async function handleChat(request, env) {
   let sysPrompt = '';
   try { sysPrompt = (await kv.get('sysprompt') || '').trim().slice(0, 4000); } catch(e){}
   const finalMessages = sysPrompt ? [{ role: 'system', content: sysPrompt }].concat(clean) : clean;
+  // Flash 开推理时不能看图（实测 Load failed）：对话里带图片就自动关闭推理
+  const hasImage = clean.some(function(m){ return Array.isArray(m.content) && m.content.some(function(p){ return p && p.type === 'image_url'; }); });
+  if (hasImage && model === 'deepseek-v4-flash') { thinking = { type: 'disabled' }; reasoningEffort = null; }
 
   try {
     const dsBody = { model, messages: finalMessages, stream: true, stream_options: { include_usage: true }, thinking };

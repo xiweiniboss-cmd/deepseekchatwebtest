@@ -494,6 +494,7 @@ async function send(){
   pendingImage = null; $('imgPreview').style.display = 'none'; $('imgInput').value = ''; $('imgBtn').classList.remove('has');
   var useVision = imgData && $('modelSel').value === 'deepseek-v4-flash';
   if (imgData && !useVision) { showErr('Pro 不能看图，已忽略图片（把模型换成 Flash 就能传图）'); imgData = null; }
+  if (useVision && effortIdx > 0) fbToast('带图片时 Flash 会自动关闭推理来看图');
   var userContent;
   if (useVision) {
     userContent = [ { type:'text', text:text }, { type:'image_url', image_url:{ url: imgData } } ];
