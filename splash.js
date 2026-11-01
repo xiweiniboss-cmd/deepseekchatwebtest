@@ -5,6 +5,10 @@
  * - 任何 JS 异常 → 立即移除自身；自动播放段各有硬性超时（MAX_TOTAL_MS）兜底，等待确认时最多 CONFIRM_WAIT_MS 后自动继续，永远不会挡住主界面。
  * - 第 1 步「需要访问许可」会暂停，等用户点「授权访问 AUTHORIZE」或按 Enter（这次点击同时解锁声音）；之后每一步自动推进并配语音；SKIP / Esc 任何时候都可直接跳过。
  * - 确认后播放英文系统语音：预渲染 /splash/voice/*.mp3（edge-tts en-US-JennyNeural + ffmpeg 处理），失败才用 speechSynthesis。
+ * - 欢迎页结束后再播一段 ~8s 16:9 角色开场（彩色霓虹描边 → 白蓝发光 → 全彩闭眼 → ~5s 睁眼微笑，/splash/opening/reveal.mp4），
+ *   无配乐；睁眼时出现「欢迎回来」，~5.9s 张嘴时播中文女声「欢迎回来。」（voice/welcome-back.mp3，edge-tts zh-CN-XiaoxiaoNeural，干声），
+ *   ~7.4s 开始淡出进主界面；点击画面 / 跳过按钮 / SKIP / Esc 均可跳过。
+ * - 开场素材懒加载：授权（或超时自动继续）后才创建 <video>/<img>、拉取「欢迎回来」语音；授权前 SKIP 不下载任何开场文件。
  * - 引入方式：index.html 的 <head> 里一行 <script src="/splash.js"></script>
  */
 (function () {
@@ -22,9 +26,17 @@
   var STEP_MS        = 1800;              // 每一步停留时长
   var LOGO_MS        = 3400;              // 开头黑屏 logo 段时长
   var WELCOME_MS     = 2400;              // 最后欢迎页停留时长
+  var OPENING_MS     = 7400;              // 开场时长（视频 8.27s，最后一帧定格；7.4s 开始淡出，加 EXIT_MS ≈ 8.15s 进主界面，对齐原片）
+  var OPENING_EYES_MS  = 5000;            // 睁眼时刻（视频里 ~5.0s）：出现「欢迎回来」
+  var OPENING_VOICE_MS = 5900;            // 「欢迎回来。」语音开始（嘴张开说话，原片 ~6.0s）
+  var OPENING_TEXT   = '欢迎回来';
+  var OPENING_TEXT_EN = 'WELCOME BACK';
+  var OPENING_SAY    = '欢迎回来。';
+  var OPENING_STALL_MS = 1800;            // 视频迟迟不开播 → 改走图片兜底
+  var OPENING_BASE   = '/splash/opening/'; // 开场素材目录（授权前不下载任何文件）
   var EXIT_MS        = 750;               // 退场动画时长
   var MAX_TOTAL_MS   = 17000;             // 硬性上限：确认前的自动段（logo + 第 1 步）不超过这个时长
-  var POST_CLICK_MAX_MS = 25000;          // 硬性上限：点确认之后的自动段（6 句语音 + 每步最多多等 1.2s 也够用）
+  var POST_CLICK_MAX_MS = 38000;          // 硬性上限：点确认后（各步+语音+欢迎+开场 ~8s）
   var CONFIRM_ENABLED = true;             // 第 1 步「需要访问许可」是否暂停等用户点「授权访问 AUTHORIZE」
   var CONFIRM_WAIT_MS = 30000;            // 等待确认的安全上限：超时自动继续（不出声）
   /* 声音：浏览器禁止无用户手势自动出声，所以只在用户点「确认身份」（或按 Enter）之后才播放。
@@ -35,6 +47,8 @@
   var VOICE_FILES    = { 'Access permission required.': 'access-required.mp3', 'ID confirmed.': 'id-confirmed.mp3', 'Request received.': 'request-received.mp3',
                          'Start processing.': 'start-processing.mp3', 'Permission authorized.': 'permission-authorized.mp3',
                          'Welcome to DeepSeek Chat.': 'welcome.mp3' };
+  // 开场专用语音：不进上面的预加载（授权前不下载），授权后由 prepOpening() 懒加载
+  var VOICE_LAZY_FILES = { '欢迎回来。': 'welcome-back.mp3' };
   var VOICE_GAP_MS   = 250;               // 两句之间至少留的间隔；上一句没说完，下一步会稍等，画面不会跑在声音前面
   var VOICE_WAIT_MAX = 1200;              // 每一步最多因声音多等这么久
   var VOICE_LOAD_WAIT_MS = 800;           // 点确认时若语音还没加载完，最多等这么久
@@ -42,7 +56,7 @@
   /* =========================================================== */
 
   var root = null, styleEl = null, timers = [], done = false, exiting = false, voiceArmed = false;
-  var capTimer = null, waiting = false, confirmed = false;
+  var capTimer = null, waiting = false, confirmed = false, opening = false, openPrepped = false;
   var actx = null, clips = {}, clipsState = 'idle', clipsCb = [], sources = [], voiceFree = 0, voiceLate = 0; // voiceFree: 当前语音预计结束时刻(performance.now)
 
   function hardRemove() {
@@ -279,6 +293,42 @@
     '@keyframes ds-sp-wipe{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}',
     /* 手机 */
     '@media (max-width:600px){#ds-splash .ds-sp-hd{left:22px;top:24px}#ds-splash .ds-sp-hd .ds-sp-b1,#ds-splash .ds-sp-hd .ds-sp-b3{font-size:17px}#ds-splash .ds-sp-hd .ds-sp-b2{font-size:8.5px}#ds-splash .ds-sp-tel{margin-top:18px}#ds-splash .ds-sp-skip{right:16px;top:22px}#ds-splash .ds-sp-bl{left:22px;bottom:70px}#ds-splash .ds-sp-br{right:22px;bottom:70px}#ds-splash .ds-sp-br .ds-sp-id{display:none}#ds-splash .ds-sp-bc{bottom:20px;width:90vw}#ds-splash .ds-sp-title{letter-spacing:.24em;text-indent:.24em}#ds-splash .ds-sp-en{letter-spacing:.3em;text-indent:.3em}#ds-splash .ds-sp-hex{display:none}#ds-splash .ds-sp-p1{display:none}#ds-splash .ds-sp-p2{left:52%;width:20%}#ds-splash .ds-sp-p3{left:76%;width:20%}}',
+    /* —— 授权完成后的角色开场（neon → 全彩） —— */
+    '#ds-splash .ds-sp-open{position:absolute;inset:0;display:none;background:#000;z-index:5;cursor:pointer}',
+    '#ds-splash.ds-sp-opening .ds-sp-open{display:block;animation:ds-sp-fadein .35s ease both}',
+    '#ds-splash.ds-sp-opening .ds-sp-os{visibility:hidden;pointer-events:none}',
+    '#ds-splash.ds-sp-opening .ds-sp-logo{display:none}',
+    '#ds-splash.ds-sp-opening .ds-sp-skip{color:#aaa;z-index:7}',
+    '#ds-splash.ds-sp-opening .ds-sp-skip:hover,#ds-splash.ds-sp-opening .ds-sp-skip:focus-visible{color:#fff;outline:1px solid rgba(255,255,255,.35)}',
+    '#ds-splash .ds-sp-open-stage{position:absolute;inset:0;overflow:hidden;transform-origin:50% 35%}',
+    '#ds-splash.ds-sp-opening .ds-sp-open-stage{animation:ds-sp-openpush ' + (OPENING_MS + EXIT_MS) + 'ms cubic-bezier(.3,0,.4,1) both}',
+    /* 16:9 全屏铺满（cover）；竖屏手机也 cover，焦点放在脸上（横向居中、纵向偏上） */
+    '#ds-splash .ds-sp-open-vid,#ds-splash .ds-sp-open-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 32%;pointer-events:none;user-select:none}',
+    '#ds-splash .ds-sp-open-vid{z-index:1}',
+    '#ds-splash .ds-sp-open-img{z-index:2;opacity:0;transition:opacity 1.4s ease}',
+    '#ds-splash .ds-sp-open.ds-sp-open-fb .ds-sp-open-vid{display:none}',
+    '#ds-splash .ds-sp-open.ds-sp-open-fb .ds-sp-open-neon{opacity:1}',
+    '#ds-splash .ds-sp-open.ds-sp-open-fb .ds-sp-open-full{opacity:0}',
+    '#ds-splash .ds-sp-open.ds-sp-open-fb.ds-sp-open-fb2 .ds-sp-open-full{opacity:1}',
+    '#ds-splash .ds-sp-open-ui{position:absolute;inset:0;z-index:3;pointer-events:none}',
+    /* 睁眼时的「欢迎回来」：桌面放左侧中部（人物居中，不挡脸）；手机放在进度条上方 */
+    '#ds-splash .ds-sp-open-wb{position:absolute;left:max(24px,5.5vw);top:50%;transform:translateY(-50%);z-index:4;pointer-events:none;color:#fff;opacity:0;filter:blur(6px);transition:opacity 1s ease,filter 1s ease,transform 1.2s cubic-bezier(.2,.7,.2,1)}',
+    '#ds-splash .ds-sp-open-wb.ds-on{opacity:1;filter:none;transform:translateY(-50%) translateX(6px)}',
+    '#ds-splash .ds-sp-open-wb b{display:block;font-size:clamp(32px,4.5vw,64px);font-weight:600;letter-spacing:.16em;line-height:1.1;text-shadow:0 0 22px rgba(110,170,255,.65),0 2px 14px rgba(0,0,0,.7)}',
+    '#ds-splash .ds-sp-open-wb span{display:block;margin-top:12px;padding-left:.2em;font-size:clamp(10px,1vw,13px);letter-spacing:.62em;color:rgba(200,225,255,.82);text-shadow:0 1px 8px rgba(0,0,0,.8)}',
+    '#ds-splash .ds-sp-open-wb span::before{content:"";display:inline-block;width:28px;height:1px;background:rgba(170,210,255,.7);vertical-align:middle;margin-right:12px}',
+    '#ds-splash .ds-sp-open-ui::before{content:"";position:absolute;left:0;right:0;bottom:0;height:32vh;background:linear-gradient(180deg,rgba(0,0,0,0) 0%,rgba(0,0,0,.45) 45%,rgba(0,0,0,.85) 100%);pointer-events:none}',
+    '#ds-splash .ds-sp-open-foot{position:absolute;left:50%;bottom:max(28px,4vh);transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:10px;width:min(46vw,280px)}',
+    '#ds-splash .ds-sp-open-bar{width:100%;height:6px;background:rgba(255,255,255,.16);overflow:hidden;border-radius:3px}',
+    '#ds-splash .ds-sp-open-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,rgba(120,200,255,.55),rgba(255,255,255,.85));border-radius:3px;box-shadow:0 0 10px rgba(120,200,255,.55)}',
+    '#ds-splash.ds-sp-opening .ds-sp-open-bar i{animation:ds-sp-openfill ' + OPENING_MS + 'ms linear forwards}',
+    '#ds-splash .ds-sp-open-hint{font-size:11px;letter-spacing:.28em;text-indent:.28em;color:rgba(255,255,255,.55);font-weight:400}',
+    '#ds-splash .ds-sp-open-skip{position:absolute;right:max(18px,2.5vw);bottom:max(22px,3.2vh);pointer-events:auto;display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;border:1px solid rgba(255,255,255,.18);background:rgba(20,20,24,.55);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);color:rgba(255,255,255,.82);font:inherit;font-size:11px;letter-spacing:.12em;cursor:pointer;appearance:none;-webkit-appearance:none;line-height:1;transition:background .2s,border-color .2s,color .2s}',
+    '#ds-splash .ds-sp-open-skip:hover,#ds-splash .ds-sp-open-skip:focus-visible{background:rgba(40,40,48,.75);border-color:rgba(255,255,255,.4);color:#fff;outline:0}',
+    '#ds-splash .ds-sp-open-skip .ds-sp-open-tri{display:inline-block;width:0;height:0;border-style:solid;border-width:5px 0 5px 8px;border-color:transparent transparent transparent rgba(255,255,255,.85)}',
+    '@keyframes ds-sp-openfill{from{width:0}to{width:100%}}',
+    '@keyframes ds-sp-openpush{from{transform:scale(1)}to{transform:scale(1.05)}}',
+    '@media (max-width:600px){#ds-splash .ds-sp-open-foot{bottom:max(56px,8vh);width:min(70vw,240px)}#ds-splash .ds-sp-open-skip{right:14px;bottom:max(18px,2.5vh);font-size:10px;padding:7px 12px}#ds-splash .ds-sp-open-hint{font-size:10px;letter-spacing:.2em;text-indent:.2em}#ds-splash .ds-sp-open-wb{left:0;right:0;top:auto;bottom:calc(max(56px,8vh) + 56px);transform:none;text-align:center}#ds-splash .ds-sp-open-wb.ds-on{transform:none}#ds-splash .ds-sp-open-wb b{font-size:36px;letter-spacing:.24em;text-indent:.24em}#ds-splash .ds-sp-open-wb span{letter-spacing:.5em;text-indent:.5em;padding-left:0}#ds-splash .ds-sp-open-wb span::before{display:none}}',
     /* 减少动态效果：所有动画瞬时完成 */
     '#ds-splash.ds-sp-rm,#ds-splash.ds-sp-rm *{animation-duration:1ms!important;animation-delay:0ms!important;transition-duration:200ms!important}'
   ].join('\n');
@@ -316,6 +366,15 @@
         '<div class="ds-sp-bc"><div class="ds-sp-sz"></div><div class="ds-sp-se ds-sp-mono"></div></div>' +
         '<div class="ds-sp-prog"><i></i></div>' +
       '</div>' +
+      '<div class="ds-sp-open" aria-hidden="true">' +
+        '<div class="ds-sp-open-stage"></div>' +   // 视频/图片在授权后由 prepOpening() 懒加载创建
+
+        '<div class="ds-sp-open-ui">' +
+          '<div class="ds-sp-open-wb" aria-live="polite"><b>' + esc(OPENING_TEXT) + '</b><span>' + esc(OPENING_TEXT_EN) + '</span></div>' +
+          '<div class="ds-sp-open-foot"><div class="ds-sp-open-bar"><i></i></div><div class="ds-sp-open-hint">正在进入…</div></div>' +
+          '<button type="button" class="ds-sp-open-skip" aria-label="点击画面跳过"><span class="ds-sp-open-tri" aria-hidden="true"></span>点击画面跳过</button>' +
+        '</div>' +
+      '</div>' +
       '<button type="button" class="ds-sp-skip ds-sp-mono ds-sp-skipdark" aria-label="跳过启动动画">SKIP &rsaquo;</button>';
 
     // 放在 <html> 下（不进 <body>），主界面 body 的子节点完全不受影响
@@ -325,6 +384,14 @@
 
     var skip = root.querySelector('.ds-sp-skip');
     skip.addEventListener('click', safe(function (ev) { ev.stopPropagation(); exit(true); }));
+    var openPanel = root.querySelector('.ds-sp-open');
+    if (openPanel) openPanel.addEventListener('click', safe(function (ev) {
+      if (!opening) return;
+      ev.stopPropagation();
+      exit(true);
+    }));
+    var oskip = root.querySelector('.ds-sp-open-skip');
+    if (oskip) oskip.addEventListener('click', safe(function (ev) { ev.stopPropagation(); exit(true); }));
     var cbtn = root.querySelector('.ds-sp-confirm');
     if (cbtn) cbtn.addEventListener('click', safe(function (ev) { ev.stopPropagation(); confirmId(); }));
     document.addEventListener('keydown', onKey, true);
@@ -406,7 +473,8 @@
     if (clipsState !== 'failed') return 0;   // 文件可用但单句失败：静默
     try {
       var u = new SpeechSynthesisUtterance(text), v = pickVoice();
-      u.lang = 'en-US'; u.rate = VOICE_RATE; if (v) u.voice = v;
+      if (/[\u4e00-\u9fff]/.test(text)) u.lang = 'zh-CN'; else { u.lang = 'en-US'; if (v) u.voice = v; }
+      u.rate = VOICE_RATE;
       window.speechSynthesis.speak(u);   // 兜底：排队播放，不打断上一句
     } catch (e) {}
     return 0;
@@ -443,9 +511,123 @@
     } else if (i > 0) say(s.say);   // 第 1 步的语音在点击时播放
   }
 
+  /* 懒加载：授权（或超时自动继续）之后才创建 <video>/<img>、拉取「欢迎回来」语音，
+   * 授权前 SKIP 不会下载任何开场素材；离开场还有 ~12s，足够缓冲 */
+  function prepOpening() {
+    if (openPrepped || done || !root) return;
+    openPrepped = true;
+    var stage = q('.ds-sp-open-stage'); if (!stage) return;
+    var v = document.createElement('video');
+    v.className = 'ds-sp-open-vid';
+    v.muted = true; v.defaultMuted = true;
+    v.setAttribute('muted', ''); v.setAttribute('playsinline', ''); v.setAttribute('webkit-playsinline', '');
+    v.preload = 'auto';
+    v.poster = OPENING_BASE + 'neon.jpg';
+    v.src = OPENING_BASE + 'reveal.mp4';
+    stage.appendChild(v);
+    var names = ['neon', 'full'];
+    for (var i = 0; i < names.length; i++) {
+      var im = document.createElement('img');
+      im.className = 'ds-sp-open-img ds-sp-open-' + names[i];
+      im.alt = ''; im.setAttribute('draggable', 'false');
+      im.src = OPENING_BASE + names[i] + '.jpg';
+      stage.appendChild(im);
+    }
+    try { v.load(); } catch (e) {}
+    prepOpeningAudio();
+  }
+  // 只有用户真的点了授权（voiceArmed，且 VOICE_ENABLED）才下载开场语音；超时自动继续 = 静音，不下载
+  function prepOpeningAudio() {
+    if (!VOICE_ENABLED || !voiceArmed || !actx || !window.fetch) return;
+    var load = function (url, cb) {
+      try {
+        fetch(url).then(function (r) { if (!r.ok) throw 0; return r.arrayBuffer(); }).then(function (ab) {
+          if (done || !actx) return;
+          actx.decodeAudioData(ab, function (buf) { if (!done) cb(buf); }, function () {});
+        })['catch'](function () {});
+      } catch (e) {}
+    };
+    for (var t in VOICE_LAZY_FILES) (function (t) { load(VOICE_BASE + VOICE_LAZY_FILES[t], function (buf) { clips[t] = buf; }); })(t);
+  }
+  function sayOpening() {
+    if (!VOICE_ENABLED || !voiceArmed) return 0;
+    if (!clips[OPENING_SAY] && actx) {   // 文件没到：退回系统中文 TTS
+      try { var u = new SpeechSynthesisUtterance(OPENING_SAY); u.lang = 'zh-CN'; window.speechSynthesis.speak(u); } catch (e) {}
+      return 900;
+    }
+    return say(OPENING_SAY);
+  }
+
+  function playOpening() {
+    if (done || exiting || !root || opening) return;
+    prepOpening();
+    opening = true;
+    root.className += ' ds-sp-opening';
+    root.setAttribute('data-step', 'opening');
+    root.setAttribute('data-opening', '1');
+    var panel = q('.ds-sp-open');
+    if (panel) panel.setAttribute('aria-hidden', 'false');
+    // 开场期间延长硬性上限，避免 ~8s 开场被 POST_CLICK_MAX_MS 提前砍掉
+    startCap(OPENING_MS + EXIT_MS + 3500);
+
+    var vid = q('.ds-sp-open-vid');
+    var finished = false, timeline = false, failed = false;
+    function finish() {
+      if (finished || done || exiting) return;
+      finished = true;
+      exit(false);
+    }
+    // 统一时间线（视频开播或进入兜底时开始计时）：睁眼出字 → 说话 → 定格 → 退场（无配乐）
+    function startTimeline() {
+      if (timeline || done || exiting) return;
+      timeline = true;
+      root.setAttribute('data-open-t0', String(Math.round(now())));
+      later(function () {
+        var wb = q('.ds-sp-open-wb'); if (wb) wb.className += ' ds-on';
+        root.setAttribute('data-eyes', String(Math.round(now())));
+      }, OPENING_EYES_MS);
+      later(sayOpening, OPENING_VOICE_MS);
+      later(finish, OPENING_MS);
+    }
+    function startFallback() {
+      if (!panel || done || exiting) return;
+      panel.className += ' ds-sp-open-fb';   // 先显示霓虹描边 neon.jpg，睁眼前 1.4s 交叉淡入全彩睁眼 full.jpg
+      root.setAttribute('data-opening', 'fallback');
+      var t0 = timeline ? Number(root.getAttribute('data-open-t0')) : now();
+      startTimeline();
+      later(function () { if (!done && !exiting) panel.className += ' ds-sp-open-fb2'; },
+            Math.max(0, OPENING_EYES_MS - 1400 - (now() - t0)));
+    }
+
+    if (vid) {
+      var onFail = safe(function () {
+        if (failed || finished) return;
+        failed = true;
+        startFallback();
+      });
+      vid.addEventListener('error', onFail);
+      vid.addEventListener('playing', safe(function () { if (!failed) startTimeline(); }));
+      try {
+        vid.currentTime = 0;
+        var p = vid.play();
+        if (p && p.then) p.then(safe(function () { if (!failed) startTimeline(); }), onFail);
+      } catch (e) { onFail(); }
+      // 视频迟迟不开播（网络慢 / 卡住）→ 改走图片兜底，时间线照常
+      later(function () { if (!timeline) onFail(); }, OPENING_STALL_MS);
+    } else {
+      startFallback();
+    }
+  }
+
   function exit(fast) {
     if (exiting || done || !root) return;
     exiting = true;
+    opening = false;
+    try {
+      var vid = q('.ds-sp-open-vid');
+      // 自然退场时保持最后一帧（定格的睁眼画面）随整体淡出；跳过时直接停掉下载
+      if (vid) { vid.pause(); if (fast) { vid.removeAttribute('src'); vid.load(); } }
+    } catch (e) {}
     if (fast) root.className += ' ds-sp-exit-fast';
     root.className += ' ds-sp-exit';
     later(hardRemove, fast ? 320 : EXIT_MS + 50);
@@ -479,12 +661,13 @@
     root.removeAttribute('data-wait');
     root.setAttribute('data-confirmed', byUser ? 'user' : 'timeout');
     startCap(POST_CLICK_MAX_MS);
+    prepOpening();                               // 授权后才开始预加载开场素材
     // 依次推进：每一步至少间隔 STEP_MS；若上一句语音还没说完，就再等到它说完（+间隔，最多 VOICE_WAIT_MAX）
     var i = 1;
     function next() {
       showStep(i);
       if (i === STEPS.length - 1) {
-        later(function () { later(function () { exit(false); }, voiceWait()); }, WELCOME_MS);   // 结束前等最后一句说完
+        later(function () { later(function () { playOpening(); }, voiceWait()); }, WELCOME_MS);   // 欢迎后再播开场，再进主界面
         return;
       }
       i++;
@@ -517,8 +700,9 @@
         later(function () { showStep(0); }, 200);
         later(pauseForConfirm, 200 + 900);
       } else {
+        prepOpening();
         for (var i = 0; i < STEPS.length; i++) (function (i) { later(function () { showStep(i); }, 200 + i * STEP_MS); })(i);
-        later(function () { exit(false); }, 200 + (STEPS.length - 1) * STEP_MS + WELCOME_MS);
+        later(function () { playOpening(); }, 200 + (STEPS.length - 1) * STEP_MS + WELCOME_MS);
       }
     }, LOGO_MS);
   }
