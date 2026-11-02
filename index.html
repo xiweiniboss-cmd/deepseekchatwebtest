@@ -160,9 +160,60 @@ header .hact{ margin-left:auto; display:flex; align-items:center; gap:6px; flex:
 #effortSlider::-moz-range-progress{ height:6px; }
 #effortSlider::-moz-range-thumb{ width:18px; height:18px; }
 #effortTicks{ font-size:10.5px; }
-#webBox{ flex:none; flex-direction:column; justify-content:center; gap:6px; align-self:stretch; padding:6px 12px; border-radius:12px; background:rgba(255,255,255,.05); border-color:rgba(255,255,255,.08); font-size:12px; }
-#webBox > span:first-child{ display:none; }
-#webBox .webLabel{ font-size:12px; }
+/* ===== 推理等级 V3：底部小按钮 + 弹出卡片（仿 ChatGPT），粗胶囊滑条，梁圣蓝紫流动（纯 CSS） ===== */
+#toolRow{ justify-content:flex-start; align-items:center; gap:8px; }
+#inputBar{ position:relative; z-index:61; } /* 让弹出卡片盖在右下角反馈按钮之上 */
+.ds-chip{ height:34px; display:inline-flex; align-items:center; gap:6px; padding:0 12px; border-radius:999px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.09); color:var(--muted); font-size:13px; font-family:inherit; white-space:nowrap; cursor:pointer; transition:background .15s, border-color .15s, color .15s; }
+.ds-chip:hover{ background:rgba(255,255,255,.09); }
+#effortWrap{ position:relative; flex:none; }
+#effortBtn svg{ flex:none; }
+#effortBtn .ds-chev{ opacity:.6; transition:transform .2s; }
+#effortBtn[aria-expanded="true"]{ border-color:rgba(77,107,254,.7); background:rgba(77,107,254,.14); color:var(--text); }
+#effortBtn[aria-expanded="true"] .ds-chev{ transform:rotate(180deg); }
+#effortBtn.lvl{ color:#c7d0ff; }
+#effortBtn.lvl #effortBtnName{ color:#8fa2ff; font-weight:600; }
+#effortBtn.max #effortBtnName{ background:linear-gradient(90deg,#7b93ff,#b49cff); -webkit-background-clip:text; background-clip:text; color:transparent; }
+#effortBtn:focus-visible{ outline:2px solid rgba(77,107,254,.7); outline-offset:2px; }
+#webBox{ flex:none; flex-direction:row; align-self:auto; height:34px; gap:8px; padding:0 6px 0 12px; border-radius:999px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.09); font-size:13px; }
+#webBox > span:first-child{ display:inline; font-size:14px; }
+#webBox .webLabel{ font-size:13px; }
+#webBox .switch{ width:38px; height:22px; }
+#webBox .switch .knob{ top:3px; left:3px; width:16px; height:16px; }
+#webBox .switch.on .knob{ left:19px; }
+/* 弹出卡片：从按钮左下角缩放展开 */
+#thinkBox{ position:absolute; left:0; bottom:calc(100% + 10px); z-index:55; width:min(360px, calc(100vw - 24px)); box-sizing:border-box; flex:none; padding:14px 16px 12px; border-radius:16px; background:rgba(28,28,36,.97); border:1px solid rgba(255,255,255,.10); box-shadow:0 18px 48px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.35); -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px); transform-origin:0 100%; opacity:0; visibility:hidden; transform:translateY(6px) scale(.9); transition:opacity .16s ease, transform .2s cubic-bezier(.2,.9,.3,1.15), visibility 0s linear .2s; }
+#thinkBox.open{ opacity:1; visibility:visible; transform:none; transition:opacity .16s ease, transform .22s cubic-bezier(.2,.9,.3,1.15), visibility 0s; }
+#thinkHead{ font-size:13px; margin-bottom:12px; color:var(--text); font-weight:600; }
+#thinkHead #effortName{ font-size:13px; }
+#effortRail{ --p:0; --thumb:26px; position:relative; height:26px; }
+#effortRail::before, #effortRail::after{ content:""; position:absolute; left:0; top:0; height:26px; border-radius:999px; pointer-events:none; }
+#effortRail::before{ right:0; background:rgba(255,255,255,.08); box-shadow:inset 0 1px 3px rgba(0,0,0,.45); }
+#effortRail::after{ width:calc(var(--thumb) + (100% - var(--thumb)) * var(--p)); background:#4D6BFE; transition:width .22s cubic-bezier(.3,.7,.4,1), box-shadow .3s; }
+#effortRail.max::after{ background-image:linear-gradient(110deg, rgba(255,255,255,0) 35%, rgba(255,255,255,.30) 50%, rgba(255,255,255,0) 65%), linear-gradient(90deg, #4D6BFE 0%, #8B5CF6 25%, #4D6BFE 50%, #8B5CF6 75%, #4D6BFE 100%); background-size:250% 100%, 200% 100%; background-repeat:no-repeat, repeat-x; box-shadow:0 0 14px rgba(139,92,246,.5); animation:ds-effort-flow 2.4s linear infinite; }
+@keyframes ds-effort-flow{ from{ background-position:180% 0, 0% 0; } to{ background-position:-80% 0, 100% 0; } }
+#effortRail #effortSlider{ position:relative; z-index:1; display:block; width:100%; height:26px; margin:0; background:transparent; cursor:pointer; touch-action:pan-y; }
+#effortRail #effortSlider:focus{ outline:none; }
+#effortRail #effortSlider::-webkit-slider-runnable-track{ height:26px; background:transparent; border:none; border-radius:999px; }
+/* 滑块：26px 透明点击区，里面一颗 18px 白点，嵌在轨道里 */
+#effortRail #effortSlider::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:26px; height:26px; margin-top:0; border-radius:50%; border:4px solid transparent; background:#fff padding-box; box-sizing:border-box; box-shadow:none; filter:drop-shadow(0 1px 2px rgba(0,0,0,.35)); transition:transform .15s; }
+#effortRail #effortSlider:active::-webkit-slider-thumb{ transform:scale(.9); }
+#effortRail:focus-within::before{ box-shadow:inset 0 1px 3px rgba(0,0,0,.45), 0 0 0 2px rgba(77,107,254,.45); }
+#effortRail #effortSlider::-moz-range-track{ height:26px; background:transparent; border:none; }
+#effortRail #effortSlider::-moz-range-progress{ background:transparent; }
+#effortRail #effortSlider::-moz-range-thumb{ box-sizing:content-box; width:18px; height:18px; border:4px solid transparent; background:#fff padding-box; border-radius:50%; box-shadow:none; }
+#effortTicks{ margin-top:8px; padding:0 4px; font-size:11.5px; }
+/* 梁圣档白点：24 颗、4 层视差（远小快淡 → 近大慢亮），从右往左流，裁在填充宽度内，不盖住滑块 */
+#effortRail .ds-stars{ position:absolute; left:0; top:0; z-index:1; height:26px; width:calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--p)); border-radius:999px; overflow:hidden; pointer-events:none; display:none; -webkit-mask-image:linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 8px), transparent 100%); mask-image:linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 8px), transparent 100%); }
+#effortRail.max .ds-stars{ display:block; }
+#effortRail .ds-stars i{ position:absolute; left:100%; top:var(--y); width:var(--s); height:var(--s); margin:calc(var(--s) / -2) 0 0 0; border-radius:50%; background:#fff; opacity:0; will-change:transform, opacity; animation:ds-star-flow var(--d) linear var(--dl) infinite; }
+#effortRail .ds-stars i.l1{ box-shadow:0 0 3px rgba(255,255,255,.55); }
+#effortRail .ds-stars i.l2{ box-shadow:0 0 4px 1px rgba(255,255,255,.6); }
+#effortRail .ds-stars i.l3{ box-shadow:0 0 6px 1px rgba(255,255,255,.75), 0 0 10px 2px rgba(196,181,253,.45); }
+@keyframes ds-star-flow{ 0%{ transform:translate3d(0,0,0); opacity:0; } 12%{ opacity:var(--o); } 82%{ opacity:var(--o); } 100%{ transform:translate3d(-440px,0,0); opacity:0; } }
+#thinkBox:not(.open) .ds-stars i{ animation-play-state:paused; }
+#effortRail #effortSlider{ z-index:2; }
+@media (prefers-reduced-motion: reduce){ #effortRail.max .ds-stars{ display:none; } }
+@media (prefers-reduced-motion: reduce){ #thinkBox, #thinkBox.open{ transition:none; transform:none; } #effortRail::after{ transition:none; } #effortRail.max::after{ animation:none; background-position:50% 0, 0 0; } #effortBtn .ds-chev{ transition:none; } }
 #inputWrap{ gap:8px; align-items:flex-end; }
 #input{ border-radius:22px; padding:11px 16px; min-height:44px; font-size:15px; background:rgba(255,255,255,.06); border-color:rgba(255,255,255,.08); }
 #imgBtn{ flex:0 0 44px; height:44px; border-radius:50%; font-size:18px; background:rgba(255,255,255,.06); border-color:rgba(255,255,255,.08); }
@@ -210,10 +261,13 @@ body::after{content:"";position:fixed;inset:0;background:var(--bgimg,url('/bg.jp
 <div id="chatTsWrap"><div id="chatTs"></div></div>
 <div id="inputBar">
   <div id="toolRow">
-    <div id="thinkBox">
+    <div id="effortWrap">
+    <button type="button" id="effortBtn" class="ds-chip" aria-haspopup="dialog" aria-expanded="false" aria-controls="thinkBox" title="推理等级"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/><circle cx="12" cy="12" r="3"/></svg><span id="effortBtnName">关闭</span><svg class="ds-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></button>
+    <div id="thinkBox" role="dialog" aria-label="推理等级">
       <div id="thinkHead"><span>推理等级</span><span id="effortName">关闭</span></div>
-      <input type="range" id="effortSlider" min="0" max="3" step="1" value="0">
+      <div id="effortRail"><span class="ds-stars" aria-hidden="true"><i class="l0" style="--y:57.6%;--s:1.6px;--d:2.15s;--dl:-1.45s;--o:0.41"></i><i class="l0" style="--y:33.1%;--s:1.2px;--d:2.08s;--dl:-0.59s;--o:0.4"></i><i class="l0" style="--y:72.7%;--s:1.4px;--d:2.11s;--dl:-1.98s;--o:0.44"></i><i class="l0" style="--y:48.2%;--s:1.3px;--d:2.01s;--dl:-1.2s;--o:0.49"></i><i class="l0" style="--y:23.8%;--s:1.4px;--d:2.14s;--dl:-0.22s;--o:0.36"></i><i class="l0" style="--y:63.3%;--s:1.5px;--d:2.13s;--dl:-1.55s;--o:0.37"></i><i class="l0" style="--y:38.9%;--s:1.3px;--d:2.08s;--dl:-0.91s;--o:0.48"></i><i class="l1" style="--y:78.4%;--s:1.9px;--d:2.18s;--dl:-0.14s;--o:0.64"></i><i class="l1" style="--y:54.0%;--s:2.0px;--d:2.27s;--dl:-1.52s;--o:0.62"></i><i class="l1" style="--y:29.5%;--s:2.2px;--d:2.23s;--dl:-0.67s;--o:0.64"></i><i class="l1" style="--y:69.1%;--s:2.1px;--d:2.21s;--dl:-1.99s;--o:0.62"></i><i class="l1" style="--y:44.7%;--s:1.9px;--d:2.17s;--dl:-1.0s;--o:0.55"></i><i class="l1" style="--y:20.2%;--s:2.2px;--d:2.3s;--dl:-0.26s;--o:0.59"></i><i class="l2" style="--y:59.8%;--s:2.8px;--d:2.41s;--dl:-1.67s;--o:0.7"></i><i class="l2" style="--y:35.3%;--s:2.6px;--d:2.55s;--dl:-0.93s;--o:0.76"></i><i class="l2" style="--y:74.9%;--s:2.9px;--d:2.55s;--dl:-2.51s;--o:0.76"></i><i class="l2" style="--y:50.4%;--s:2.6px;--d:2.44s;--dl:-1.44s;--o:0.75"></i><i class="l2" style="--y:26.0%;--s:2.7px;--d:2.45s;--dl:-0.57s;--o:0.77"></i><i class="l2" style="--y:65.5%;--s:2.6px;--d:2.45s;--dl:-2.1s;--o:0.78"></i><i class="l3" style="--y:41.1%;--s:3.7px;--d:2.58s;--dl:-1.06s;--o:0.91"></i><i class="l3" style="--y:80.6%;--s:3.5px;--d:2.71s;--dl:-0.21s;--o:0.96"></i><i class="l3" style="--y:56.2%;--s:3.6px;--d:2.56s;--dl:-1.82s;--o:0.98"></i><i class="l3" style="--y:31.7%;--s:3.5px;--d:2.75s;--dl:-0.7s;--o:0.9"></i><i class="l3" style="--y:71.3%;--s:3.3px;--d:2.62s;--dl:-2.51s;--o:0.99"></i></span><input type="range" id="effortSlider" min="0" max="3" step="1" value="0" aria-label="推理等级"></div>
       <div id="effortTicks"><span>关闭</span><span>小难梁</span><span>梁子</span><span>梁圣</span></div>
+    </div>
     </div>
     <div id="webBox"><span>🌐</span><span class="webLabel">联网搜索</span><span id="webSwitch" class="switch"><span class="knob"></span></span></div>
   </div>
@@ -428,7 +482,11 @@ function syncThinkUI(){
   s.value = effortIdx;
   $('effortName').textContent = EFFORTS[effortIdx].n;
   var p = (effortIdx / 3 * 100);
-  s.style.setProperty('--trackbg', 'linear-gradient(90deg,#6d28d9 0%,#4a9eff ' + p + '%,#2c2c36 ' + p + '%)');
+  var rail = $('effortRail');
+  if (rail) { rail.style.setProperty('--p', String(p / 100)); rail.classList.toggle('max', effortIdx === EFFORTS.length - 1); }
+  s.setAttribute('aria-valuetext', EFFORTS[effortIdx].n);
+  var eb = $('effortBtn');
+  if (eb) { $('effortBtnName').textContent = EFFORTS[effortIdx].n; eb.classList.toggle('lvl', effortIdx > 0); eb.classList.toggle('max', effortIdx === EFFORTS.length - 1); }
   var ts = document.querySelectorAll('#effortTicks span');
   for (var i = 0; i < ts.length; i++) ts[i].classList.toggle('on', i === effortIdx);
   $('modelSel').value = curModel;
@@ -448,6 +506,24 @@ function setEffort(i){
   syncThinkUI();
 }
 $('effortSlider').oninput = function(){ setEffort(parseInt(this.value, 10)); };
+// 推理等级卡片：点按钮展开，点外面 / Esc 关闭
+function setEffortCard(open, refocus){
+  var box = $('thinkBox'), btn = $('effortBtn');
+  box.classList.toggle('open', open);
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) { try { $('effortSlider').focus({ preventScroll: true }); } catch(e){} }
+  else if (refocus) btn.focus();
+}
+$('effortBtn').onclick = function(e){ e.stopPropagation(); setEffortCard(!$('thinkBox').classList.contains('open')); };
+document.addEventListener('pointerdown', function(e){
+  if (!$('thinkBox').classList.contains('open')) return;
+  if ($('effortWrap').contains(e.target)) return;
+  setEffortCard(false);
+}, true);
+$('input').addEventListener('focus', function(){ if ($('thinkBox').classList.contains('open')) setEffortCard(false); });
+document.addEventListener('keydown', function(e){
+  if (e.key === 'Escape' && $('thinkBox').classList.contains('open')) { e.preventDefault(); setEffortCard(false, true); }
+});
 $('webSwitch').onclick = function(){
   webOn = !webOn;
   try { localStorage.setItem('ds_web', webOn ? '1' : '0'); } catch(e){}
