@@ -101,7 +101,7 @@ async function handleAuth(request, env) {
     const exists = await kv.get(ukey);
     if (exists) return json({ ok: false, error: '用户名已存在，请直接登录' }, 400);
     const regIp = request.headers.get('cf-connecting-ip') || '';
-    await kv.put(ukey, JSON.stringify({ ph: passHash, t: Date.now(), ip: regIp }));
+    await kv.put(ukey, JSON.stringify({ ph: passHash, t: Date.now(), ip: regIp, g: newGen() }));
   } else {
     const raw = await kv.get(ukey);
     if (!raw) return json({ ok: false, error: '用户不存在，请先注册' }, 400);
@@ -243,33 +243,263 @@ async function handleConvDelete(request, env){
 
 // ---------- 后台管理 ----------
 function adminPage(env){
-  const html = "<!DOCTYPE html><html lang=\"zh\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>可乐站·DeepSeek 后台</title><style>*{box-sizing:border-box}body{margin:0;background:#0b0b0f;color:#e8e8ec;font-family:-apple-system,sans-serif;padding:16px;max-width:720px;margin:0 auto}h1{font-size:20px}h2{font-size:16px;margin-top:24px}.card{background:#14141a;border:1px solid #2c2c36;border-radius:14px;padding:14px;margin-bottom:10px}.row{display:flex;justify-content:space-between;align-items:center;gap:8px}button{border:none;border-radius:10px;padding:9px 14px;font-size:14px;cursor:pointer}.bv{background:#2a2a34;color:#e8e8ec}.bd{background:#3a2028;color:#ff8ba0}.msg{border-left:3px solid #2c2c36;padding:8px 10px;margin:8px 0;font-size:14px;line-height:1.7;white-space:pre-wrap;word-break:break-word}.msg.user{border-color:#4a9eff}.msg.assistant{border-color:#22c55e}.rl{font-size:12px;color:#9a9aa3;margin-bottom:4px}#kb{text-align:center;margin-top:60px}.hd{display:none}input{background:#101016;border:1px solid #2c2c36;border-radius:10px;color:#e8e8ec;padding:12px;font-size:15px;width:220px;text-align:center}.sm{font-size:12px;color:#9a9aa3}.fb-txt.clamp{max-height:60px;overflow:hidden}.blue{color:#4a9eff;font-size:12px}.bbar{background:#14141a;border:1px solid #2c2c36;border-radius:12px;padding:10px 12px;margin:10px 0}.bbar .br2{display:flex;gap:8px;flex-wrap:wrap}.bbar .br2 button{padding:7px 12px;font-size:12px;border-radius:8px}.bcount{font-size:12px;color:#4a9eff;margin-left:8px}.card.sel{border-color:#4a9eff;background:#16202f}.tg{background:#4a9eff22;color:#4a9eff;border-radius:6px;padding:2px 6px;font-size:11px}.tg2{background:#22c55e22;color:#22c55e;border-radius:6px;padding:2px 6px;font-size:11px}body::after{content:\"\";position:fixed;inset:0;background:url('/bg.jpg') center/cover no-repeat;opacity:.25;pointer-events:none;z-index:2147483647}</style></head><body><div id=\"kb\"><h1>可乐站·DeepSeek 后台</h1><p class=\"sm\">请输入管理密码</p><input type=\"password\" id=\"ki\"><br><br><button class=\"bv\" id=\"goBtn\">进入</button><div id=\"lm\" style=\"margin-top:10px;min-height:20px\"></div></div><div id=\"mn\" class=\"hd\"><div class=\"card\"><div class=\"row\"><div><b>💰 API 余额</b><br><span class=\"sm\" id=\"balInfo\">未查询</span></div><button class=\"bv\" id=\"balBtn\">查询</button></div></div><div class=\"card\"><b>💰 价格设置</b> <span class=\"sm\">元/百万 tokens</span><div style=\"margin-top:8px;font-size:14px;line-height:2.2\">Flash 输入 <input id=\"pr_fi\" style=\"width:70px;text-align:center;background:#101016;border:1px solid #2c2c36;border-radius:8px;color:#e8e8ec;padding:6px;font-size:14px\"> 输出 <input id=\"pr_fo\" style=\"width:70px;text-align:center;background:#101016;border:1px solid #2c2c36;border-radius:8px;color:#e8e8ec;padding:6px;font-size:14px\"><br>Pro 输入 <input id=\"pr_pi\" style=\"width:70px;text-align:center;background:#101016;border:1px solid #2c2c36;border-radius:8px;color:#e8e8ec;padding:6px;font-size:14px\"> 输出 <input id=\"pr_po\" style=\"width:70px;text-align:center;background:#101016;border:1px solid #2c2c36;border-radius:8px;color:#e8e8ec;padding:6px;font-size:14px\"></div><div style=\"margin-top:8px\"><button class=\"bv\" id=\"prSave\">保存</button> <span class=\"sm\" id=\"prMsg\"></span></div><p class=\"sm\" style=\"margin-top:6px\">默认 Flash 输入1元/输出4元，Pro 输入3元/输出6元（Pro 为官方价，Flash 为估算，以官网价格页为准自行调整）。改版前历史用量按 Flash 价格折算。</p></div><h1>用户管理</h1><button class=\"bv\" id=\"rfBtn\">刷新</button><div class=\"bbar\"><div class=\"br2\"><button class=\"bv\" id=\"bSelU\">全选</button><button class=\"bd\" id=\"bDelU\">删除所选</button><button class=\"bd\" id=\"bBlkU\">拉黑所选</button><button class=\"bd\" id=\"bDelBlkU\">删除并拉黑</button><button class=\"bd\" id=\"bBanU\">封禁所选</button><button class=\"bv\" id=\"bCanU\">取消选择</button><span id=\"selUCount\" class=\"bcount\"></span></div></div><div id=\"ul\"></div><h2 id=\"ct\" class=\"hd\"></h2><div id=\"cl\"></div><h2 id=\"mt\" class=\"hd\"></h2><div id=\"ml\"></div><h2 style=\"margin-top:30px\">🔨 封禁名单</h2><button class=\"bv\" id=\"banBtn\">刷新封禁名单</button><div class=\"bbar\"><div class=\"br2\"><button class=\"bv\" id=\"bSelBan\">全选</button><button class=\"bv\" id=\"bUnbBan\">解除所选</button><button class=\"bv\" id=\"bCanBan\">取消选择</button><span id=\"selBanCount\" class=\"bcount\"></span></div></div><div id=\"banl\" style=\"margin-top:10px\"></div><h2 style=\"margin-top:30px\">🚫 黑名单</h2><button class=\"bv\" id=\"blBtn\">刷新黑名单</button><div class=\"bbar\"><div class=\"br2\"><button class=\"bv\" id=\"bSelB\">全选</button><button class=\"bv\" id=\"bUnbB\">解除所选</button><button class=\"bv\" id=\"bCanB\">取消选择</button><span id=\"selBCount\" class=\"bcount\"></span></div></div><div id=\"bl\" style=\"margin-top:10px\"></div><h2 style=\"margin-top:30px\">💬 反馈记录</h2><select id=\"fbSite\" style=\"background:#101016;border:1px solid #2c2c36;border-radius:8px;color:#e8e8ec;padding:8px;font-size:14px;margin-right:8px\"><option value=\"[DeepSeek站]\">[DeepSeek站]</option><option value=\"[刹车站]\">[刹车站]</option><option value=\"\">全部站点</option></select> <button class=\"bv\" id=\"fbBtn\">加载反馈</button><div class=\"bbar\"><div class=\"br2\"><button class=\"bv\" id=\"bSelF\">全选</button><button class=\"bd\" id=\"bDelF\">删除所选</button><button class=\"bv\" id=\"bCanF\">取消选择</button><span id=\"selFCount\" class=\"bcount\"></span></div></div><div id=\"fl\" style=\"margin-top:10px\"></div><h2 style=\"margin-top:30px\">⚙️ 预设提示词</h2><p class=\"sm\">所有用户、所有对话生效（新对话和继续对话都一样）。清空保存即关闭。每次请求会多消耗提示词长度的输入 token。</p><div class=\"card\"><textarea id=\"sysp\" style=\"width:100%;min-height:120px;background:#101016;border:1px solid #2c2c36;border-radius:10px;color:#e8e8ec;padding:10px;font-size:14px;box-sizing:border-box\" placeholder=\"例如：你是一个猫娘，说话结尾要加喵~\"></textarea><div style=\"margin-top:10px;display:flex;gap:8px\"><button class=\"bv\" id=\"syspSave\">保存</button><button class=\"bv\" id=\"syspLoad\">重新加载</button></div><div id=\"syspMsg\" class=\"sm\" style=\"margin-top:6px\"></div></div></div><script>var K=\"\";function lm(t,c){var e=document.getElementById(\"lm\");if(e){e.textContent=t;e.style.color=c||\"#ff8ba0\";}}function esc(t){return String(t||\"\").replace(/&/g,\"&amp;\").replace(/</g,\"&lt;\").replace(/>/g,\"&gt;\");}function fmtT(t){var d=new Date(t);return d.getFullYear()+\"-\"+(d.getMonth()+1)+\"-\"+d.getDate()+\" \"+d.getHours()+\":\"+(\"0\"+d.getMinutes()).slice(-2);}function api(p){return fetch(p+(p.indexOf(\"?\")>=0?\"&\":\"?\")+\"key=\"+encodeURIComponent(K)).then(function(r){return r.text();}).then(function(t){try{return JSON.parse(t);}catch(e){return{ok:false,error:\"返回异常\"}}}).catch(function(e){return{ok:false,error:\"网络错误\"}});}async function doLogin(){lm(\"验证中…\",\"#9a9aa3\");K=document.getElementById(\"ki\").value.trim();if(!K){lm(\"请输入密码\");return;}var j=await api(\"/api/admin/users\");if(!j.ok){lm(j.error||\"密码错误\");return;}document.getElementById(\"kb\").style.display=\"none\";document.getElementById(\"mn\").classList.remove(\"hd\");showUsers(j.users);loadBlacklist();loadBans();loadSysp();loadBalance();loadPricing();}function showUsers(us){var h=\"\";if(!us.length)h='<div class=\"card\">暂无用户</div>';for(var i=0;i<us.length;i++){var u=us[i];var tk=u.cost;h+='<div class=\"card ucard\" data-u=\"'+esc(u.username)+'\" data-ip=\"'+esc(u.ip||\"\")+'\" data-dev=\"'+esc(u.dev||\"\")+'\"><div class=\"row\"><div><b>'+esc(u.username)+'</b> '+u.convs+'个对话<br><span class=\"sm\">'+esc(u.model||\"--\")+' | '+esc(u.ip||\"--\")+'</span><br><span class=\"sm\">最后活跃: '+(u.lastT?fmtT(u.lastT):\"--\")+'</span><br><span class=\"blue\">消耗: '+fmtCost(tk)+'</span></div><div><button class=\"bv\" data-u=\"'+esc(u.username)+'\" data-a=\"v\">查看</button> <button class=\"bd\" data-u=\"'+esc(u.username)+'\" data-a=\"d\">删除</button> <button class=\"bd\" data-u=\"'+esc(u.username)+'\" data-a=\"b\" data-ip=\"'+esc(u.ip||\"\")+'\" data-dev=\"'+esc(u.dev||\"\")+'\">拉黑</button> <button class=\"bd\" data-u=\"'+esc(u.username)+'\" data-a=\"f\" data-ip=\"'+esc(u.ip||\"\")+'\" data-dev=\"'+esc(u.dev||\"\")+'\">封禁</button></div></div></div>';}document.getElementById(\"ul\").innerHTML=h;bindSelU();\nvar bs=document.getElementById(\"ul\").querySelectorAll(\"button[data-u]\");for(var i=0;i<bs.length;i++){bs[i].onclick=function(){var u=this.getAttribute(\"data-u\");var a=this.getAttribute(\"data-a\");if(a===\"v\")viewConvs(u);else if(a===\"b\")blockUser(u,this.getAttribute(\"data-ip\"),this.getAttribute(\"data-dev\"));else if(a===\"f\")banUser(u,this.getAttribute(\"data-ip\"),this.getAttribute(\"data-dev\"));else delUser(u);};}}async function viewConvs(u){var j=await api(\"/api/admin/user-convs?user=\"+encodeURIComponent(u));if(!j.ok){alert(\"失败\");return;}document.getElementById(\"ml\").innerHTML=\"\";var t=document.getElementById(\"ct\");t.classList.remove(\"hd\");t.textContent=u+\" 的对话\";var h=\"\";if(!j.convs.length)h='<div class=\"card\">无对话</div>';for(var i=0;i<j.convs.length;i++){var c=j.convs[i];var lv=c.think===true?'深度思考':(c.think||'关闭');var tags=(c.web?' <span class=\"tg2\">🌐联网</span>':\"\");h+='<div class=\"card\"><div class=\"row\"><div><b>'+esc(c.title)+'</b>'+tags+'<br><span class=\"sm\">'+esc('⚡推理强度：'+lv)+'</span><br><span class=\"sm\">'+(c.t?fmtT(c.t):\"--\")+'</span></div><button class=\"bv\" data-u=\"'+esc(u)+'\" data-c=\"'+c.id+'\">查看内容</button></div></div>';}var cl=document.getElementById(\"cl\");cl.innerHTML=h;var bs=cl.querySelectorAll(\"button[data-c]\");for(var k=0;k<bs.length;k++){bs[k].onclick=function(){viewMsgs(this.getAttribute(\"data-u\"),this.getAttribute(\"data-c\"));};}t.scrollIntoView();}async function viewMsgs(u,id){var j=await api(\"/api/admin/conv?user=\"+encodeURIComponent(u)+\"&id=\"+encodeURIComponent(id));if(!j.ok){alert(\"失败\");return;}var t=document.getElementById(\"mt\");t.classList.remove(\"hd\");t.textContent=\"对话内容\";var h=\"\";for(var i=0;i<j.messages.length;i++){var m=j.messages[i];var txt=Array.isArray(m.content)?m.content.map(function(p){return p.type===\"text\"?p.text:\"[图片]\";}).join(\"\"):String(m.content||\"\");h+='<div class=\"msg '+m.role+'\"><div class=\"rl\">'+(m.role===\"user\"?\"用户\":\"AI\")+(m.t?' <span>'+fmtT(m.t)+'</span>':\"\")+'</div>'+esc(txt).replace(/\\n/g,\"<br>\")+'</div>';}document.getElementById(\"ml\").innerHTML=h||'<div class=\"card\">空</div>';t.scrollIntoView();}async function delUser(u){if(!confirm(\"删除 \"+u+\" 及所有记录？不可恢复！\"))return;var r=await fetch(\"/api/admin/delete-user?key=\"+encodeURIComponent(K),{method:\"POST\",headers:{\"Content-Type\":\"application/json\"},body:JSON.stringify({user:u})});var j=await r.json();if(j.ok){doLogin();}else{alert(j.error||\"失败\");}}async function blockUser(u,ip,dev){if(!ip&&!dev){alert(\"该用户无IP/设备记录\");return;}var reason=prompt(\"拉黑 \"+u+\" 的理由（可空）:\",\"\");if(reason===null)return;reason=reason.trim().slice(0,100);if(ip){await fetch(\"/api/admin/blacklist?key=\"+encodeURIComponent(K),{method:\"POST\",headers:{\"Content-Type\":\"application/json\"},body:JSON.stringify({type:\"ip\",value:ip,username:u,reason:reason})});}if(dev){await fetch(\"/api/admin/blacklist?key=\"+encodeURIComponent(K),{method:\"POST\",headers:{\"Content-Type\":\"application/json\"},body:JSON.stringify({type:\"device\",value:dev,username:u,reason:reason})});}alert(\"已拉黑\");loadBlacklist();}async function loadBlacklist(){var j=await api(\"/api/admin/blacklist\");if(!j.ok)return;var h=\"\";if(!j.list.length)h='<div class=\"card\">黑名单为空</div>';for(var i=0;i<j.list.length;i++){var b=j.list[i];h+='<div class=\"card bcard\" data-t=\"'+b.type+'\" data-v=\"'+esc(b.value)+'\"><div class=\"row\"><div><b>'+(b.type===\"ip\"?\"IP\":\"设备\")+'</b> '+esc(b.value)+'<br><span class=\"sm\">'+esc(b.username||\"--\")+' | '+fmtT(b.t)+'</span>'+(b.reason?'<br><span class=\"sm\" style=\"color:#ffb020\">理由: '+esc(b.reason)+'</span>':\"\")+'</div><button class=\"bv\" data-t=\"'+b.type+'\" data-v=\"'+esc(b.value)+'\">解除</button></div></div>';}bindSelB();\nvar el=document.getElementById(\"bl\");el.innerHTML=h;var bs=el.querySelectorAll(\"button[data-v]\");for(var k=0;k<bs.length;k++){bs[k].onclick=function(){unblock(this.getAttribute(\"data-t\"),this.getAttribute(\"data-v\"));};}}async function unblock(t,v){if(!confirm(\"解除拉黑 \"+v+\"？\"))return;var r=await fetch(\"/api/admin/blacklist?key=\"+encodeURIComponent(K)+\"&type=\"+t+\"&value=\"+encodeURIComponent(v),{method:\"DELETE\"});var j=await r.json();if(j.ok)loadBlacklist();else alert(\"失败\");}document.getElementById(\"goBtn\").onclick=doLogin;document.getElementById(\"rfBtn\").onclick=doLogin;document.getElementById(\"blBtn\").onclick=loadBlacklist;\nfunction fmtCost(c){c=+c||0;return \"¥\"+(c>0&&c<0.01?c.toFixed(4):c.toFixed(2));}\nasync function loadPricing(){var j=await api(\"/api/admin/pricing\");if(!j.ok||!j.pricing)return;var p=j.pricing;document.getElementById(\"pr_fi\").value=p.flash_in;document.getElementById(\"pr_fo\").value=p.flash_out;document.getElementById(\"pr_pi\").value=p.pro_in;document.getElementById(\"pr_po\").value=p.pro_out;}\ndocument.getElementById(\"prSave\").onclick=async function(){var b={flash_in:document.getElementById(\"pr_fi\").value,flash_out:document.getElementById(\"pr_fo\").value,pro_in:document.getElementById(\"pr_pi\").value,pro_out:document.getElementById(\"pr_po\").value};var r=await fetch(\"/api/admin/pricing?key=\"+encodeURIComponent(K),{method:\"POST\",headers:{\"Content-Type\":\"application/json\"},body:JSON.stringify(b)});var j=await r.json();var m=document.getElementById(\"prMsg\");if(j.ok){m.textContent=\"已保存，金额按新价格重算\";m.style.color=\"#22c55e\";var jj=await api(\"/api/admin/users\");if(jj.ok)showUsers(jj.users);}else{m.textContent=j.error||\"保存失败\";m.style.color=\"#ff8ba0\";}};\nasync function loadBalance(){var el=document.getElementById(\"balInfo\");el.textContent=\"查询中…\";var j=await api(\"/api/admin/balance\");if(!j.ok){el.textContent=j.error||\"查询失败\";return;}if(!j.balances.length){el.textContent=\"无余额信息\";return;}var h=j.balances.map(function(b){return b.currency+\" \"+b.total+\"（充值 \"+b.topped+\" / 赠送 \"+b.granted+\"）\";}).join(\"；\");el.textContent=h+(j.is_available?\"\":\"（余额不足）\");}\ndocument.getElementById(\"balBtn\").onclick=loadBalance;\nasync function loadSysp(){var j=await api(\"/api/admin/sysprompt\");if(j.ok){document.getElementById(\"sysp\").value=j.prompt||\"\";var m=document.getElementById(\"syspMsg\");if(m)m.textContent=j.prompt?\"当前已设置预设提示词\":\"当前未设置\";}}\ndocument.getElementById(\"syspSave\").onclick=async function(){var v=document.getElementById(\"sysp\").value.trim().slice(0,4000);var r=await fetch(\"/api/admin/sysprompt?key=\"+encodeURIComponent(K),{method:\"POST\",headers:{\"Content-Type\":\"application/json\"},body:JSON.stringify({prompt:v})});var j=await r.json();var m=document.getElementById(\"syspMsg\");if(j.ok){m.textContent=v?\"已保存，即刻生效\":\"已清空，预设提示词关闭\";m.style.color=\"#22c55e\";}else{m.textContent=j.error||\"保存失败\";m.style.color=\"#ff8ba0\";}};\ndocument.getElementById(\"syspLoad\").onclick=loadSysp;\ndocument.getElementById(\"banBtn\").onclick=loadBans;\nvar selBan={};\nfunction updSelBan(){var n=Object.keys(selBan).length;var e=document.getElementById(\"selBanCount\");if(e)e.textContent=n?(\"已选 \"+n+\" 条\"):\"\";}\nfunction banDaysLabel(d){return d===1?\"一天\":d===3?\"三天\":d===5?\"五天\":d===30?\"一个月\":d===365?\"一年\":d+\"天\";}\nasync function banUser(u,ip,dev){\n  var c=prompt(\"封禁 \"+u+\"，请选择时长：\\n1. 一天\\n2. 三天\\n3. 五天\\n4. 一个月\\n5. 一年\",\"1\");\n  if(c===null)return;\n  var days={\"1\":1,\"2\":3,\"3\":5,\"4\":30,\"5\":365}[c.trim()];\n  if(!days){alert(\"请输入 1-5\");return;}\n  var reason=prompt(\"封禁理由（可空）:\",\"\");\n  if(reason===null)return;\n  reason=reason.trim().slice(0,100);\n  var j=await postJ(\"/api/admin/ban\",{username:u,days:days,reason:reason});\n  if(!j.ok){alert(j.error||\"失败\");return;}\n  var items=[];\n  if(ip)items.push({type:\"ip\",value:ip,username:u,reason:reason});\n  if(dev)items.push({type:\"device\",value:dev,username:u,reason:reason});\n  if(items.length)await postJ(\"/api/admin/blacklist\",{items:items});\n  alert(\"已封禁 \"+banDaysLabel(days)+(items.length?\"，IP/设备已同步拉黑\":\"\"));loadBans();loadBlacklist();\n}\nasync function loadBans(){\n  var j=await api(\"/api/admin/bans\");if(!j.ok)return;\n  var h=\"\";if(!j.list.length)h='<div class=\"card\">封禁名单为空</div>';\n  for(var i=0;i<j.list.length;i++){var b=j.list[i];\n    h+='<div class=\"card bancard\" data-u=\"'+esc(b.username)+'\"><div class=\"row\"><div><b>'+esc(b.username)+'</b> 封禁'+banDaysLabel(b.days)+'<br><span class=\"sm\">解封：'+fmtT(b.until)+'</span>'+(b.reason?'<br><span class=\"sm\" style=\"color:#ffb020\">理由: '+esc(b.reason)+'</span>':\"\")+'</div><button class=\"bv\" data-u=\"'+esc(b.username)+'\">解除</button></div></div>';}\n  document.getElementById(\"banl\").innerHTML=h;bindSelBan();\n  var bs=document.getElementById(\"banl\").querySelectorAll(\"button[data-u]\");\n  for(var k=0;k<bs.length;k++){bs[k].onclick=function(){unbanUser(this.getAttribute(\"data-u\"));};}}\nasync function unbanUser(u){if(!confirm(\"解除封禁 \"+u+\"？\"))return;var r=await fetch(\"/api/admin/ban?key=\"+encodeURIComponent(K),{method:\"DELETE\",headers:{\"Content-Type\":\"application/json\"},body:JSON.stringify({username:u})});var j=await r.json();if(j.ok)loadBans();else alert(\"失败\");}\nfunction bindSelBan(){var cs=document.getElementById(\"banl\").querySelectorAll(\".bancard\");for(var i=0;i<cs.length;i++){var c=cs[i];if(selBan[c.getAttribute(\"data-u\")])c.classList.add(\"sel\");c.onclick=function(e){if(e.target.closest(\"button\"))return;var u=this.getAttribute(\"data-u\");if(this.classList.contains(\"sel\")){this.classList.remove(\"sel\");delete selBan[u];}else{this.classList.add(\"sel\");selBan[u]=1;}updSelBan();};}updSelBan();}\ndocument.getElementById(\"bSelBan\").onclick=function(){var cs=document.getElementById(\"banl\").querySelectorAll(\".bancard\");selBan={};for(var i=0;i<cs.length;i++){cs[i].classList.add(\"sel\");selBan[cs[i].getAttribute(\"data-u\")]=1;}updSelBan();};\ndocument.getElementById(\"bCanBan\").onclick=function(){selBan={};var cs=document.getElementById(\"banl\").querySelectorAll(\".bancard\");for(var i=0;i<cs.length;i++)cs[i].classList.remove(\"sel\");updSelBan();};\ndocument.getElementById(\"bUnbBan\").onclick=async function(){var us=Object.keys(selBan);if(!us.length){alert(\"请先点选\");return;}if(!confirm(\"解除 \"+us.length+\" 个封禁？\"))return;var r=await fetch(\"/api/admin/ban?key=\"+encodeURIComponent(K),{method:\"DELETE\",headers:{\"Content-Type\":\"application/json\"},body:JSON.stringify({usernames:us})});var j=await r.json();if(j.ok){selBan={};loadBans();}else alert(\"失败\");};\ndocument.getElementById(\"bBanU\").onclick=async function(){var us=Object.keys(selU);if(!us.length){alert(\"请先点选用户卡片\");return;}var c=prompt(\"封禁 \"+us.length+\" 个用户，请选择时长：\\n1. 一天\\n2. 三天\\n3. 五天\\n4. 一个月\\n5. 一年\",\"1\");if(c===null)return;var days={\"1\":1,\"2\":3,\"3\":5,\"4\":30,\"5\":365}[c.trim()];if(!days){alert(\"请输入 1-5\");return;}var reason=prompt(\"封禁理由（可空）:\",\"\");if(reason===null)return;reason=reason.trim().slice(0,100);var bans=[];var items=[];for(var i=0;i<us.length;i++){bans.push({username:us[i],days:days,reason:reason});var x=selU[us[i]];if(x.ip)items.push({type:\"ip\",value:x.ip,username:us[i],reason:reason});if(x.dev)items.push({type:\"device\",value:x.dev,username:us[i],reason:reason});}var j=await postJ(\"/api/admin/ban\",{bans:bans});if(!j.ok){alert(j.error||\"失败\");return;}if(items.length)await postJ(\"/api/admin/blacklist\",{items:items});alert(\"已封禁 \"+us.length+\" 个用户 \"+banDaysLabel(days)+(items.length?\"，IP/设备已同步拉黑\":\"\"));loadBans();loadBlacklist();};\nvar selU={},selF={},selB={};\nfunction updSelU(){var n=Object.keys(selU).length;var e=document.getElementById(\"selUCount\");if(e)e.textContent=n?(\"已选 \"+n+\" 个\"):\"\";}\nfunction updSelF(){var n=Object.keys(selF).length;var e=document.getElementById(\"selFCount\");if(e)e.textContent=n?(\"已选 \"+n+\" 条\"):\"\";}\nfunction updSelB(){var n=Object.keys(selB).length;var e=document.getElementById(\"selBCount\");if(e)e.textContent=n?(\"已选 \"+n+\" 条\"):\"\";}\nfunction toggleCard(c,map,key,get){if(c.classList.contains(\"sel\")){c.classList.remove(\"sel\");delete map[key];}else{c.classList.add(\"sel\");map[key]=get();}}\nfunction bindSelU(){var cs=document.getElementById(\"ul\").querySelectorAll(\".ucard\");for(var i=0;i<cs.length;i++){var c=cs[i];if(selU[c.getAttribute(\"data-u\")])c.classList.add(\"sel\");c.onclick=function(e){if(e.target.closest(\"button\"))return;var u=this.getAttribute(\"data-u\");toggleCard(this,selU,u,function(){return{ip:this.getAttribute(\"data-ip\"),dev:this.getAttribute(\"data-dev\")}}.bind(this));updSelU();};}updSelU();}\nfunction bindSelB(){var cs=document.getElementById(\"bl\").querySelectorAll(\".bcard\");for(var i=0;i<cs.length;i++){var c=cs[i];var k=c.getAttribute(\"data-t\")+\":\"+c.getAttribute(\"data-v\");if(selB[k])c.classList.add(\"sel\");c.onclick=function(e){if(e.target.closest(\"button\"))return;var kk=this.getAttribute(\"data-t\")+\":\"+this.getAttribute(\"data-v\");toggleCard(this,selB,kk,function(){return{t:this.getAttribute(\"data-t\"),v:this.getAttribute(\"data-v\")}}.bind(this));updSelB();};}updSelB();}\nfunction bindSelF(){var cs=document.getElementById(\"fl\").querySelectorAll(\".fcard\");for(var i=0;i<cs.length;i++){var c=cs[i];if(selF[c.getAttribute(\"data-id\")])c.classList.add(\"sel\");c.onclick=function(e){if(e.target.closest(\"button\")||e.target.closest(\"a\"))return;var fid=this.getAttribute(\"data-id\");toggleCard(this,selF,fid,function(){return 1;});updSelF();};}updSelF();}\nfunction clearSel(cls,map,upd){selU=cls===\"u\"?{}:selU;selF=cls===\"f\"?{}:selF;selB=cls===\"b\"?{}:selB;var cs=document.querySelectorAll(cls===\"u\"?\".ucard\":cls===\"f\"?\".fcard\":\".bcard\");for(var i=0;i<cs.length;i++)cs[i].classList.remove(\"sel\");upd();}\nasync function postJ(p,b){var r=await fetch(p+\"?key=\"+encodeURIComponent(K),{method:\"POST\",headers:{\"Content-Type\":\"application/json\"},body:JSON.stringify(b)});return r.json();}\ndocument.getElementById(\"bSelU\").onclick=function(){var cs=document.getElementById(\"ul\").querySelectorAll(\".ucard\");selU={};for(var i=0;i<cs.length;i++){cs[i].classList.add(\"sel\");var u=cs[i].getAttribute(\"data-u\");selU[u]={ip:cs[i].getAttribute(\"data-ip\"),dev:cs[i].getAttribute(\"data-dev\")};}updSelU();};\ndocument.getElementById(\"bCanU\").onclick=function(){clearSel(\"u\",selU,updSelU);};\ndocument.getElementById(\"bDelU\").onclick=async function(){var us=Object.keys(selU);if(!us.length){alert(\"请先点选用户卡片\");return;}if(!confirm(\"删除 \"+us.length+\" 个用户及所有记录？不可恢复！\"))return;var j=await postJ(\"/api/admin/delete-user\",{users:us});if(j.ok){selU={};doLogin();}else alert(j.error||\"失败\");};\ndocument.getElementById(\"bBlkU\").onclick=async function(){var us=Object.keys(selU),items=[];for(var i=0;i<us.length;i++){var x=selU[us[i]];if(x.ip)items.push({type:\"ip\",value:x.ip,username:us[i]});if(x.dev)items.push({type:\"device\",value:x.dev,username:us[i]});}if(!us.length){alert(\"请先点选用户卡片\");return;}var reason=prompt(\"拉黑 \"+us.length+\" 个用户的理由（可空）:\",\"\");if(reason===null)return;reason=reason.trim().slice(0,100);for(var ri=0;ri<items.length;ri++)items[ri].reason=reason;if(!items.length){alert(\"所选用户无IP/设备记录\");return;}var j=await postJ(\"/api/admin/blacklist\",{items:items});if(j.ok){loadBlacklist();alert(\"已拉黑\");}else alert(j.error||\"失败\");};\ndocument.getElementById(\"bDelBlkU\").onclick=async function(){var us=Object.keys(selU),items=[];for(var i=0;i<us.length;i++){var x=selU[us[i]];if(x.ip)items.push({type:\"ip\",value:x.ip,username:us[i]});if(x.dev)items.push({type:\"device\",value:x.dev,username:us[i]});}if(!us.length){alert(\"请先点选用户卡片\");return;}var reason2=prompt(\"删除并拉黑 \"+us.length+\" 个用户的理由（可空）:\",\"\");if(reason2===null)return;reason2=reason2.trim().slice(0,100);for(var rj=0;rj<items.length;rj++)items[rj].reason=reason2;if(!confirm(\"删除并拉黑 \"+us.length+\" 个用户？不可恢复！\"))return;if(items.length)await postJ(\"/api/admin/blacklist\",{items:items});var j=await postJ(\"/api/admin/delete-user\",{users:us});if(j.ok){selU={};doLogin();}else alert(j.error||\"失败\");};\ndocument.getElementById(\"bSelF\").onclick=function(){var cs=document.getElementById(\"fl\").querySelectorAll(\".fcard\");selF={};for(var i=0;i<cs.length;i++){cs[i].classList.add(\"sel\");selF[cs[i].getAttribute(\"data-id\")]=1;}updSelF();};\ndocument.getElementById(\"bCanF\").onclick=function(){clearSel(\"f\",selF,updSelF);};\ndocument.getElementById(\"bDelF\").onclick=async function(){var ids=Object.keys(selF);if(!ids.length){alert(\"请先点选反馈卡片\");return;}if(!confirm(\"删除 \"+ids.length+\" 条反馈（含附件）？不可恢复！\"))return;var r=await fetch(\"/api/admin/feedbacks?key=\"+encodeURIComponent(K),{method:\"DELETE\",headers:{\"Content-Type\":\"application/json\"},body:JSON.stringify({ids:ids})});var j=await r.json();if(j.ok){selF={};document.getElementById(\"fbBtn\").click();}else alert(j.error||\"失败\");};\ndocument.getElementById(\"bSelB\").onclick=function(){var cs=document.getElementById(\"bl\").querySelectorAll(\".bcard\");selB={};for(var i=0;i<cs.length;i++){cs[i].classList.add(\"sel\");selB[cs[i].getAttribute(\"data-t\")+\":\"+cs[i].getAttribute(\"data-v\")]={t:cs[i].getAttribute(\"data-t\"),v:cs[i].getAttribute(\"data-v\")};}updSelB();};\ndocument.getElementById(\"bCanB\").onclick=function(){clearSel(\"b\",selB,updSelB);};\ndocument.getElementById(\"bUnbB\").onclick=async function(){var ks=Object.keys(selB);if(!ks.length){alert(\"请先点选\");return;}if(!confirm(\"解除 \"+ks.length+\" 条拉黑？\"))return;var items=[];for(var i=0;i<ks.length;i++)items.push(selB[ks[i]]);var r=await fetch(\"/api/admin/blacklist?key=\"+encodeURIComponent(K),{method:\"DELETE\",headers:{\"Content-Type\":\"application/json\"},body:JSON.stringify({items:items})});var j=await r.json();if(j.ok){selB={};loadBlacklist();}else alert(j.error||\"失败\");};document.getElementById(\"ki\").addEventListener(\"keydown\",function(e){if(e.key===\"Enter\")doLogin();});function copyFbText(i){\nvar fbs=window._fbs||[];var f=fbs[i];if(!f)return;\nvar txt=f.text||\"\";\nfunction ok(){alert(\"已复制\"); }\nfunction fb(){\nvar ta=document.createElement(\"textarea\");ta.value=txt;\nta.style.position=\"fixed\";ta.style.opacity=\"0\";\ndocument.body.appendChild(ta);ta.select();\ntry{document.execCommand(\"copy\");ok();}catch(e){alert(\"复制失败\");}\nta.remove();\n}\nif(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(ok,fb);}else{fb();}\n}\nasync function saveFbFile(url,name){\ntry{\nvar r=await fetch(url);if(!r.ok)throw 0;\nvar b=await r.blob();\nvar ou=URL.createObjectURL(b);\nvar a=document.createElement(\"a\");a.href=ou;a.download=name||\"file\";\ndocument.body.appendChild(a);a.click();\nsetTimeout(function(){URL.revokeObjectURL(ou);a.remove();},4000);\n}catch(e){alert(\"保存失败，可长按附件手动保存\");}\n}\nfunction showFbFiles(i){\nvar fbs=window._fbs||[];var f=fbs[i];if(!f||!f.files||!f.files.length)return;\nvar el=document.getElementById(\"fbf\"+i);\nif(el.style.display!==\"none\"){el.style.display=\"none\";return;}\nvar h=\"\";\nfor(var k=0;k<f.files.length;k++){\nvar fl=f.files[k];\nvar url=\"/api/admin/feedback-file?key=\"+encodeURIComponent(K)+\"&k=\"+encodeURIComponent(fl.key);\nvar nm=esc(fl.name||\"附件\");\nif((fl.type||\"\").indexOf(\"image/\")===0){\nh+='<div style=\"margin-bottom:8px\"><img src=\"'+url+'\" style=\"max-width:100%;border-radius:8px\"><br><button class=\"bv\" style=\"padding:4px 10px;font-size:12px\" onclick=\"saveFbFile(\\''+url+'\\',\\''+nm.replace(/'/g,\"\")+'\\')\">保存图片</button> <a href=\"'+url+'\" target=\"_blank\" class=\"blue\">'+nm+'</a></div>';\n}else if((fl.type||\"\").indexOf(\"video/\")===0){\nh+='<div style=\"margin-bottom:8px\"><video src=\"'+url+'\" controls style=\"max-width:100%;border-radius:8px\"></video><br><button class=\"bv\" style=\"padding:4px 10px;font-size:12px\" onclick=\"saveFbFile(\\''+url+'\\',\\''+nm.replace(/'/g,\"\")+'\\')\">保存视频</button> <span class=\"sm\">'+nm+'</span></div>';\n}else{\nh+='<div><a href=\"'+url+'\" target=\"_blank\" class=\"blue\">附件: '+nm+'</a></div>';\n}\n}\nel.innerHTML=h;el.style.display=\"block\";\n}\ndocument.getElementById(\"fbBtn\").onclick=async function(){var _fs=document.getElementById(\"fbSite\");var _sv=_fs?_fs.value:\"[DeepSeek站]\";var j=await api(\"/api/admin/feedbacks?site=\"+encodeURIComponent(_sv));if(!j.ok){alert(\"失败\");return;}window._fbs=j.feedbacks;var h=\"\";if(!j.feedbacks.length)h='<div class=\"card\">暂无反馈</div>';for(var i=0;i<j.feedbacks.length;i++){var f=j.feedbacks[i];var txt=esc(f.text).replace(/\\n/g,\"<br>\");var short=txt.length>150;h+='<div class=\"card fcard\" data-id=\"'+f.id+'\"><div class=\"fb-txt'+(short?\" clamp\":\"\")+'\" id=\"fbt'+i+'\">'+txt+'</div>'+(short?'<a href=\"javascript:void(0)\" onclick=\"var e=document.getElementById(\\'fbt'+i+'\\');e.classList.toggle(\\'clamp\\');this.textContent=e.classList.contains(\\'clamp\\')?\\'展开全文\\':\\'收起\\'\" style=\"color:#4a9eff;font-size:12px\">展开全文</a>':\"\")+'<div class=\"sm\" style=\"margin-top:6px\">'+fmtT(f.t)+' | '+esc(f.ip||\"--\")+(f.contact?\" | \"+esc(f.contact):\"\")+' <button class=\"bv\" style=\"padding:4px 10px;font-size:12px\" onclick=\"copyFbText('+i+')\">复制文本</button>'+(f.files&&f.files.length?\" | \"+f.files.length+\"个附件 <button class=\\\"bv\\\" style=\\\"padding:4px 10px;font-size:12px\\\" onclick=\\\"showFbFiles(\"+i+\")\\\">查看</button>\":\"\")+'</div><div id=\"fbf'+i+'\" style=\"display:none;margin-top:8px\"></div></div>';}document.getElementById(\"fl\").innerHTML=h;bindSelF();};try{var _km=/[?&]key=([^&]+)/.exec(location.search);if(_km){document.getElementById(\"ki\").value=decodeURIComponent(_km[1]);doLogin();}}catch(_ke){}</script></body></html>\n";
+  const html = "<!doctype html>\n<html lang=\"zh\">\n  <head>\n    <meta charset=\"utf-8\" />\n    <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n    <title>可乐站·DeepSeek 后台</title>\n    <style>\n      * {\n        box-sizing: border-box;\n      }\n      body {\n        margin: 0;\n        background: #0b0b0f;\n        color: #e8e8ec;\n        font-family: -apple-system, sans-serif;\n        padding: 0 16px 40px;\n        max-width: 1080px;\n        margin: 0 auto;\n      }\n      h1 {\n        font-size: 20px;\n      }\n      h2 {\n        font-size: 16px;\n        margin-top: 24px;\n      }\n      .card {\n        background: rgba(20, 20, 26, 0.72);\n        backdrop-filter: blur(6px);\n        -webkit-backdrop-filter: blur(6px);\n        border: 1px solid #2c2c36;\n        border-radius: 14px;\n        padding: 14px;\n        margin-bottom: 10px;\n      }\n      .row {\n        display: flex;\n        justify-content: space-between;\n        align-items: center;\n        gap: 8px;\n      }\n      button {\n        border: none;\n        border-radius: 10px;\n        padding: 9px 14px;\n        font-size: 14px;\n        cursor: pointer;\n      }\n      .bv {\n        background: #2a2a34;\n        color: #e8e8ec;\n      }\n      .bd {\n        background: #3a2028;\n        color: #ff8ba0;\n      }\n      .msg {\n        border-left: 3px solid #2c2c36;\n        padding: 8px 10px;\n        margin: 8px 0;\n        font-size: 14px;\n        line-height: 1.7;\n        white-space: pre-wrap;\n        word-break: break-word;\n      }\n      .msg.user {\n        border-color: #4a9eff;\n      }\n      .msg.assistant {\n        border-color: #22c55e;\n      }\n      .rl {\n        font-size: 12px;\n        color: #b0b0b8;\n        margin-bottom: 4px;\n      }\n      #kb {\n        text-align: center;\n        margin-top: 60px;\n      }\n      .hd {\n        display: none;\n      }\n      #ki,\n      .ni {\n        background: #101016;\n        border: 1px solid #2c2c36;\n        border-radius: 10px;\n        color: #e8e8ec;\n        padding: 12px;\n        font-size: 15px;\n        text-align: center;\n      }\n      #ki {\n        width: 220px;\n      }\n      .sm {\n        font-size: 12px;\n        color: #b0b0b8;\n      }\n      .fb-txt.clamp {\n        max-height: 60px;\n        overflow: hidden;\n      }\n      .blue {\n        color: #4a9eff;\n        font-size: 12px;\n      }\n      .bbar {\n        background: rgba(20, 20, 26, 0.72);\n        backdrop-filter: blur(6px);\n        -webkit-backdrop-filter: blur(6px);\n        border: 1px solid #2c2c36;\n        border-radius: 12px;\n        padding: 10px 12px;\n        margin: 10px 0;\n      }\n      .bbar .br2 {\n        display: flex;\n        gap: 8px;\n        flex-wrap: wrap;\n      }\n      .bbar .br2 button {\n        padding: 7px 12px;\n        font-size: 12px;\n        border-radius: 8px;\n      }\n      .bcount {\n        font-size: 12px;\n        color: #4a9eff;\n        margin-left: 8px;\n      }\n      .card.sel {\n        border-color: #4a9eff;\n        background: #16202f;\n      }\n      .tg {\n        background: #4a9eff22;\n        color: #4a9eff;\n        border-radius: 6px;\n        padding: 2px 6px;\n        font-size: 11px;\n      }\n      .tg2 {\n        background: #22c55e22;\n        color: #22c55e;\n        border-radius: 6px;\n        padding: 2px 6px;\n        font-size: 11px;\n      }\n      .topbar {\n        position: sticky;\n        top: 0;\n        z-index: 50;\n        background: #0b0b0fe6;\n        backdrop-filter: blur(8px);\n        -webkit-backdrop-filter: blur(8px);\n        padding: 12px 0 0;\n        margin-bottom: 14px;\n        border-bottom: 1px solid #2c2c36;\n      }\n      .topbar h1 {\n        margin: 0 0 10px;\n        font-size: 18px;\n        display: flex;\n        align-items: center;\n        justify-content: space-between;\n        gap: 8px;\n      }\n      .tabs {\n        display: flex;\n        gap: 4px;\n        overflow-x: auto;\n        scrollbar-width: none;\n      }\n      .tabs::-webkit-scrollbar {\n        display: none;\n      }\n      @media (max-width: 520px) {\n        .tab {\n          padding: 8px 9px !important;\n          font-size: 13px;\n        }\n        .tabs {\n          -webkit-mask-image: linear-gradient(90deg, #000 88%, transparent);\n          mask-image: linear-gradient(90deg, #000 88%, transparent);\n        }\n        .tabs.end {\n          -webkit-mask-image: none;\n          mask-image: none;\n        }\n      }\n      .tab {\n        background: transparent;\n        color: #b0b0b8;\n        border-radius: 10px 10px 0 0;\n        padding: 9px 14px;\n        white-space: nowrap;\n        border-bottom: 2px solid transparent;\n      }\n      .tab.on {\n        color: #e8e8ec;\n        border-bottom-color: #4a9eff;\n        background: rgba(20, 20, 26, 0.72);\n        backdrop-filter: blur(6px);\n        -webkit-backdrop-filter: blur(6px);\n      }\n      .pane {\n        display: none;\n      }\n      .pane.on {\n        display: block;\n      }\n      .sec-hd {\n        display: flex;\n        align-items: center;\n        justify-content: space-between;\n        gap: 8px;\n        flex-wrap: wrap;\n        margin: 4px 0 10px;\n      }\n      .sec-hd h2 {\n        margin: 0;\n      }\n      .stats {\n        display: grid;\n        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));\n        gap: 10px;\n        margin-bottom: 10px;\n      }\n      .stat {\n        background: rgba(20, 20, 26, 0.72);\n        backdrop-filter: blur(6px);\n        -webkit-backdrop-filter: blur(6px);\n        border: 1px solid #2c2c36;\n        border-radius: 14px;\n        padding: 14px;\n        min-width: 0;\n      }\n      .stat .k {\n        font-size: 12px;\n        color: #b0b0b8;\n      }\n      .stat .v {\n        font-size: 22px;\n        font-weight: 600;\n        margin-top: 6px;\n        word-break: break-all;\n      }\n      .stat .s {\n        font-size: 12px;\n        color: #b0b0b8;\n        margin-top: 4px;\n      }\n      .ptab {\n        width: 100%;\n        border-collapse: collapse;\n        font-size: 14px;\n        margin-top: 8px;\n      }\n      .ptab th,\n      .ptab td {\n        padding: 6px 4px;\n        text-align: center;\n        border-bottom: 1px solid #22222a;\n      }\n      .ptab th {\n        color: #b0b0b8;\n        font-weight: 500;\n        font-size: 12px;\n      }\n      .ptab td:first-child,\n      .ptab th:first-child {\n        text-align: left;\n      }\n      .ni {\n        width: 76px;\n        padding: 6px;\n        font-size: 14px;\n        border-radius: 8px;\n      }\n      .ulist {\n        display: grid;\n        grid-template-columns: 1fr;\n        gap: 10px;\n      }\n      .ulist > .card {\n        margin-bottom: 0;\n      }\n      .ucard .row {\n        align-items: flex-start;\n      }\n      .ucard .row > div:first-child {\n        flex: 1;\n        min-width: 0;\n      }\n      .ucard .acts {\n        flex-shrink: 0;\n        display: flex;\n        gap: 6px;\n        flex-wrap: wrap;\n        justify-content: flex-end;\n      }\n      .ucard .acts button {\n        padding: 6px 10px;\n        font-size: 12px;\n        border-radius: 8px;\n      }\n      .ucard .meta {\n        margin-top: 4px;\n        line-height: 1.6;\n        word-break: break-all;\n      }\n      .cost {\n        display: inline-block;\n        margin-top: 6px;\n        color: #4a9eff;\n        font-size: 13px;\n        font-weight: 600;\n      }\n      .two {\n        display: grid;\n        grid-template-columns: 1fr;\n        gap: 16px;\n      }\n      .fld {\n        background: #101016;\n        border: 1px solid #2c2c36;\n        border-radius: 8px;\n        color: #e8e8ec;\n        padding: 8px;\n        font-size: 14px;\n      }\n      @media (min-width: 900px) {\n        .ulist {\n          grid-template-columns: 1fr 1fr;\n        }\n        .two {\n          grid-template-columns: 1fr 1fr;\n        }\n      }\n      @media (max-width: 520px) {\n        .stat .v {\n          font-size: 18px;\n        }\n        .ucard .row {\n          flex-direction: column;\n        }\n        .ucard .acts {\n          justify-content: flex-start;\n        }\n      }\n      #bgv {\n        position: fixed;\n        inset: 0;\n        overflow: hidden;\n        background: #000;\n        pointer-events: none;\n        z-index: -2;\n      }\n      #bgv .gw {\n        position: absolute;\n        left: 50%;\n        top: 50%;\n        width: max(115vmin, 720px);\n        height: max(115vmin, 720px);\n        transform-origin: center;\n        translate: -50% -50%;\n        animation: gxbreath 70s ease-in-out infinite;\n      }\n      #bgv .gx {\n        width: 100%;\n        height: 100%;\n        background: center/contain no-repeat;\n        opacity: 0.9;\n        -webkit-mask-image: radial-gradient(closest-side, #000 72%, transparent 100%);\n        mask-image: radial-gradient(closest-side, #000 72%, transparent 100%);\n        animation: gxspin 360s linear infinite;\n        will-change: transform;\n      }\n      #bgv.on .gx {\n        background-image: url(\"/bg-galaxy-v1.jpg\");\n      }\n      @keyframes gxspin {\n        to { transform: rotate(-360deg); }\n      }\n      @keyframes gxbreath {\n        0%, 100% { transform: scale(1); }\n        50% { transform: scale(1.08); }\n      }\n      @media (prefers-reduced-motion: reduce) {\n        #bgv .gw, #bgv .gx { animation: none; }\n      }\n      .credit {\n        margin: 28px 0 8px;\n        padding: 8px 12px;\n        border-radius: 10px;\n        background: rgba(0, 0, 0, 0.7);\n        color: #c8c8d0;\n        font-size: 12px;\n        line-height: 1.6;\n      }\n      .credit a {\n        color: #8ec5ff;\n      }\n      #mn h2,\n      #mn .sec-hd + .sm,\n      #mn > .pane > .sm {\n        text-shadow: 0 1px 2px #000, 0 0 10px rgba(0, 0, 0, 0.95);\n      }\n      @media (max-width: 520px) {\n        .card, .bbar, .stat, .tab.on, .topbar {\n          backdrop-filter: none;\n          -webkit-backdrop-filter: none;\n        }\n        .card, .bbar, .stat {\n          background: rgba(20, 20, 26, 0.9);\n        }\n      }\n      body::after {\n        content: \"\";\n        position: fixed;\n        inset: 0;\n        background: radial-gradient(ellipse at center, rgba(11, 11, 16, 0.5), rgba(11, 11, 16, 0.65));\n        pointer-events: none;\n        z-index: -1;\n      }\n    </style>\n  </head>\n  <body>\n    <div id=\"bgv\" aria-hidden=\"true\"><div class=\"gw\"><div class=\"gx\"></div></div></div>\n    <div id=\"kb\">\n      <h1>可乐站·DeepSeek 后台</h1>\n      <p class=\"sm\">请输入管理密码</p>\n      <input type=\"password\" id=\"ki\" /><br /><br /><button\n        class=\"bv\"\n        id=\"goBtn\"\n      >\n        进入\n      </button>\n      <div id=\"lm\" style=\"margin-top: 10px; min-height: 20px\"></div>\n    </div>\n    <div id=\"mn\" class=\"hd\">\n      <div class=\"topbar\">\n        <h1><span>可乐站·DeepSeek 后台</span></h1>\n        <div class=\"tabs\" id=\"tabs\">\n          <button class=\"tab on\" data-p=\"ov\">📊 概览</button>\n          <button class=\"tab\" data-p=\"us\">👥 用户</button>\n          <button class=\"tab\" data-p=\"bn\">🔨 封禁 / 黑名单</button>\n          <button class=\"tab\" data-p=\"fb\">💬 反馈</button>\n          <button class=\"tab\" data-p=\"sp\">⚙️ 提示词</button>\n        </div>\n      </div>\n      <div class=\"pane on\" id=\"p_ov\">\n      <div class=\"stats\">\n        <div class=\"stat\"><div class=\"k\">💰 DeepSeek 账户余额</div><div class=\"v\" id=\"balV\">--</div><div class=\"s\"><span id=\"balInfo\">未查询</span> · <button id=\"balBtn\" style=\"background:none;color:#4a9eff;padding:0;font-size:12px\">刷新</button></div></div>\n        <div class=\"stat\"><div class=\"k\">🧾 本站累计消耗</div><div class=\"v\" id=\"sumCost\">--</div><div class=\"s\" id=\"sumNote\">按下方价格计算</div></div>\n        <div class=\"stat\"><div class=\"k\">👥 用户 / 对话</div><div class=\"v\" id=\"sumUsers\">--</div><div class=\"s\" id=\"sumConvs\"></div></div>\n        <div class=\"stat\"><div class=\"k\">🔎 联网搜索</div><div class=\"v\" id=\"sumSearch\">--</div><div class=\"s\">次（开始记录后）</div></div>\n      </div>\n      <div class=\"card\">\n        <div class=\"row\"><b>💰 价格设置</b><span class=\"sm\">空闲时段价 · 元/百万 tokens</span></div>\n        <table class=\"ptab\">\n          <tr><th>模型</th><th>输入·缓存命中</th><th>输入·未命中</th><th>输出</th></tr>\n          <tr><td>Flash</td><td><input class=\"ni\" id=\"pr_fh\" inputmode=\"decimal\" /></td><td><input class=\"ni\" id=\"pr_fi\" inputmode=\"decimal\" /></td><td><input class=\"ni\" id=\"pr_fo\" inputmode=\"decimal\" /></td></tr>\n          <tr><td>Pro</td><td><input class=\"ni\" id=\"pr_ph\" inputmode=\"decimal\" /></td><td><input class=\"ni\" id=\"pr_pi\" inputmode=\"decimal\" /></td><td><input class=\"ni\" id=\"pr_po\" inputmode=\"decimal\" /></td></tr>\n        </table>\n        <div style=\"margin-top: 10px; font-size: 14px; line-height: 2.2\">\n          高峰倍数 <input class=\"ni\" id=\"pr_pk\" inputmode=\"decimal\" /> 　联网搜索 <input class=\"ni\" id=\"pr_sr\" inputmode=\"decimal\" /> 元/千次<br />\n          法定节假日（按空闲价）<input class=\"fld\" id=\"pr_hd\" style=\"width:100%;margin-top:6px;box-sizing:border-box\" placeholder=\"例如 2026-10-01,2026-10-02，用逗号或空格分隔\" />\n        </div>\n        <div style=\"margin-top: 8px\">\n          <button class=\"bv\" id=\"prSave\">保存</button>\n          <button class=\"bv\" id=\"prDef\">恢复官方价</button>\n          <span class=\"sm\" id=\"prMsg\"></span>\n        </div>\n        <p class=\"sm\" style=\"margin-top: 6px; line-height: 1.6\">\n          默认为 DeepSeek 官网价（空闲时段）：Flash 命中 0.02 / 未命中 1 / 输出 4，Pro 命中 0.15 / 未命中 4.5 / 输出 13.5，联网搜索 5 元/千次。北京时间周一至周五 9–12 点、14–18 点为高峰，按倍数加价（官方为 2 倍）；法定节假日官方按空闲价，请在上面填日期（不填就按高峰算）。每次对话的金额在记账时就按当时价格算好存下，改价只影响以后的对话，不会改历史。改版前的旧记录没有分缓存和时段，按当前空闲未命中价估算，标「含估算」。已删除用户的消耗会单独保留在合计里。\n        </p>\n      </div>\n      </div>\n      <div class=\"pane\" id=\"p_us\">\n      <div class=\"sec-hd\"><h2>👥 用户</h2><button class=\"bv\" id=\"rfBtn\">刷新</button></div>\n      <div class=\"bbar\">\n        <div class=\"br2\">\n          <button class=\"bv\" id=\"bSelU\">全选</button\n          ><button class=\"bd\" id=\"bDelU\">删除所选</button\n          ><button class=\"bd\" id=\"bBlkU\">拉黑所选</button\n          ><button class=\"bd\" id=\"bDelBlkU\">删除并拉黑</button\n          ><button class=\"bd\" id=\"bBanU\">封禁所选</button\n          ><button class=\"bv\" id=\"bCanU\">取消选择</button\n          ><span id=\"selUCount\" class=\"bcount\"></span>\n        </div>\n      </div>\n      <div id=\"cvBox\" class=\"card hd\">\n        <div class=\"sec-hd\"><h2 id=\"ct\" class=\"hd\"></h2><button class=\"bv\" id=\"cvClose\">收起，回到用户列表</button></div>\n        <div id=\"cl\"></div>\n        <h2 id=\"mt\" class=\"hd\"></h2>\n        <div id=\"ml\"></div>\n      </div>\n      <div id=\"ul\" class=\"ulist\"></div>\n      </div>\n      <div class=\"pane\" id=\"p_bn\">\n        <div class=\"two\"><div>\n      <div class=\"sec-hd\"><h2>🔨 封禁名单</h2><button class=\"bv\" id=\"banBtn\">刷新</button></div>\n      <div class=\"bbar\">\n        <div class=\"br2\">\n          <button class=\"bv\" id=\"bSelBan\">全选</button\n          ><button class=\"bv\" id=\"bUnbBan\">解除所选</button\n          ><button class=\"bv\" id=\"bCanBan\">取消选择</button\n          ><span id=\"selBanCount\" class=\"bcount\"></span>\n        </div>\n      </div>\n      <div id=\"banl\" style=\"margin-top: 10px\"></div>\n        </div><div>\n      <div class=\"sec-hd\"><h2>🚫 黑名单</h2><button class=\"bv\" id=\"blBtn\">刷新</button></div>\n      <div class=\"bbar\">\n        <div class=\"br2\">\n          <button class=\"bv\" id=\"bSelB\">全选</button\n          ><button class=\"bv\" id=\"bUnbB\">解除所选</button\n          ><button class=\"bv\" id=\"bCanB\">取消选择</button\n          ><span id=\"selBCount\" class=\"bcount\"></span>\n        </div>\n      </div>\n      <div id=\"bl\" style=\"margin-top: 10px\"></div>\n        </div></div>\n      </div>\n      <div class=\"pane\" id=\"p_fb\">\n      <div class=\"sec-hd\"><h2>💬 反馈记录</h2><div style=\"display:flex;gap:8px;align-items:center\">\n      <select id=\"fbSite\" class=\"fld\">\n        <option value=\"[DeepSeek站]\">[DeepSeek站]</option>\n        <option value=\"[刹车站]\">[刹车站]</option>\n        <option value=\"\">全部站点</option>\n      </select>\n      <button class=\"bv\" id=\"fbBtn\">加载反馈</button></div></div>\n      <div class=\"bbar\">\n        <div class=\"br2\">\n          <button class=\"bv\" id=\"bSelF\">全选</button\n          ><button class=\"bd\" id=\"bDelF\">删除所选</button\n          ><button class=\"bv\" id=\"bCanF\">取消选择</button\n          ><span id=\"selFCount\" class=\"bcount\"></span>\n        </div>\n      </div>\n      <div id=\"fl\" style=\"margin-top: 10px\"></div>\n      </div>\n      <div class=\"pane\" id=\"p_sp\">\n      <div class=\"sec-hd\"><h2>⚙️ 预设提示词</h2></div>\n      <p class=\"sm\">\n        所有用户、所有对话生效（新对话和继续对话都一样）。清空保存即关闭。每次请求会多消耗提示词长度的输入\n        token。\n      </p>\n      <div class=\"card\">\n        <textarea\n          id=\"sysp\"\n          style=\"\n            width: 100%;\n            min-height: 120px;\n            background: #101016;\n            border: 1px solid #2c2c36;\n            border-radius: 10px;\n            color: #e8e8ec;\n            padding: 10px;\n            font-size: 14px;\n            box-sizing: border-box;\n          \"\n          placeholder=\"例如：你是一个猫娘，说话结尾要加喵~\"\n        ></textarea>\n        <div style=\"margin-top: 10px; display: flex; gap: 8px\">\n          <button class=\"bv\" id=\"syspSave\">保存</button\n          ><button class=\"bv\" id=\"syspLoad\">重新加载</button>\n          </div>\n    </div>\n      </div>\n    </div>\n    <p class=\"credit hd\" id=\"credit\">背景图：<a href=\"https://esahubble.org/images/heic0602a/\" target=\"_blank\" rel=\"noopener\">M101 风车星系，European Space Agency &amp; NASA</a>，按 <a href=\"https://creativecommons.org/licenses/by/4.0/deed.zh-hans\" target=\"_blank\" rel=\"noopener\">CC BY 4.0</a> 许可使用；本站做了裁切、暗角处理，并加了旋转和缩放动画。</p>\n    <script>\n      var K = \"\";\n      function lm(t, c) {\n        var e = document.getElementById(\"lm\");\n        if (e) {\n          e.textContent = t;\n          e.style.color = c || \"#ff8ba0\";\n        }\n      }\n      function esc(t) {\n        return String(t || \"\")\n          .replace(/&/g, \"&amp;\")\n          .replace(/</g, \"&lt;\")\n          .replace(/>/g, \"&gt;\")\n          .replace(/\"/g, \"&quot;\")\n          .replace(/'/g, \"&#39;\");\n      }\n      function fmtT(t) {\n        var d = new Date(t);\n        return (\n          d.getFullYear() +\n          \"-\" +\n          (\"0\" + (d.getMonth() + 1)).slice(-2) +\n          \"-\" +\n          (\"0\" + d.getDate()).slice(-2) +\n          \" \" +\n          (\"0\" + d.getHours()).slice(-2) +\n          \":\" +\n          (\"0\" + d.getMinutes()).slice(-2)\n        );\n      }\n      function api(p) {\n        return fetch(\n          p +\n            (p.indexOf(\"?\") >= 0 ? \"&\" : \"?\") +\n            \"key=\" +\n            encodeURIComponent(K),\n        )\n          .then(function (r) {\n            return r.text();\n          })\n          .then(function (t) {\n            try {\n              return JSON.parse(t);\n            } catch (e) {\n              return { ok: false, error: \"返回异常\" };\n            }\n          })\n          .catch(function (e) {\n            return { ok: false, error: \"网络错误\" };\n          });\n      }\n      async function doLogin() {\n        lm(\"验证中…\", \"#9a9aa3\");\n        K = document.getElementById(\"ki\").value.trim();\n        if (!K) {\n          lm(\"请输入密码\");\n          return;\n        }\n        var j = await api(\"/api/admin/users\");\n        if (!j.ok) {\n          lm(j.error || \"密码错误\");\n          return;\n        }\n        document.getElementById(\"kb\").style.display = \"none\";\n        document.getElementById(\"mn\").classList.remove(\"hd\");\n        document.getElementById(\"bgv\").classList.add(\"on\");\n        document.getElementById(\"credit\").classList.remove(\"hd\");\n        // 对账：超时的预记账转正、已删账号残留并账；有变动就刷新一次列表\n        fetch(\"/api/admin/reconcile?key=\" + encodeURIComponent(K), { method: \"POST\" })\n          .then(function (r) { return r.json(); })\n          .then(function (x) {\n            if (x && x.ok && (x.settled || x.merged))\n              api(\"/api/admin/users\").then(function (jj) { if (jj.ok) { DELC = jj.deleted || null; showUsers(jj.users); } });\n          })\n          .catch(function () {});\n        DELC = j.deleted || null;\n        showUsers(j.users);\n        loadBlacklist();\n        loadBans();\n        loadSysp();\n        loadBalance();\n        loadPricing();\n      }\n      function showUsers(us) {\n        var h = \"\";\n        if (!us.length) h = '<div class=\"card\">暂无用户</div>';\n        for (var i = 0; i < us.length; i++) {\n          var u = us[i];\n          var tk = u.cost;\n          h +=\n            '<div class=\"card ucard\" data-u=\"' +\n            esc(u.username) +\n            '\" data-ip=\"' +\n            esc(u.ip || \"\") +\n            '\" data-dev=\"' +\n            esc(u.dev || \"\") +\n            '\"><div class=\"row\"><div style=\"min-width:0\"><b>' +\n            esc(u.username) +\n            \"</b> <span class=\\\"sm\\\">\" +\n            (+u.convs || 0) +\n            ' 个对话</span><div class=\"sm meta\">' +\n            esc(u.model || \"--\") +\n            \" | \" +\n            esc(u.ip || \"--\") +\n            '<br>最后活跃: ' +\n            (u.lastT ? fmtT(u.lastT) : \"--\") +\n            '</div><span class=\"cost\">消耗 ' +\n            fmtCost(tk) +\n            (u.est ? ' <span class=\"tg\">含估算</span>' : \"\") +\n            (u.search ? ' <span class=\"sm\">· 搜索 ' + (+u.search || 0) + \" 次</span>\" : \"\") +\n            '</span></div><div class=\"acts\"><button class=\"bv\" data-u=\"' +\n            esc(u.username) +\n            '\" data-a=\"v\">查看</button> <button class=\"bd\" data-u=\"' +\n            esc(u.username) +\n            '\" data-a=\"d\">删除</button> <button class=\"bd\" data-u=\"' +\n            esc(u.username) +\n            '\" data-a=\"b\" data-ip=\"' +\n            esc(u.ip || \"\") +\n            '\" data-dev=\"' +\n            esc(u.dev || \"\") +\n            '\">拉黑</button> <button class=\"bd\" data-u=\"' +\n            esc(u.username) +\n            '\" data-a=\"f\" data-ip=\"' +\n            esc(u.ip || \"\") +\n            '\" data-dev=\"' +\n            esc(u.dev || \"\") +\n            '\">封禁</button></div></div></div>';\n        }\n        document.getElementById(\"ul\").innerHTML = h;\n        showSummary(us);\n        bindSelU();\n        var bs = document\n          .getElementById(\"ul\")\n          .querySelectorAll(\"button[data-u]\");\n        for (var i = 0; i < bs.length; i++) {\n          bs[i].onclick = function () {\n            var u = this.getAttribute(\"data-u\");\n            var a = this.getAttribute(\"data-a\");\n            if (a === \"v\") viewConvs(u);\n            else if (a === \"b\")\n              blockUser(\n                u,\n                this.getAttribute(\"data-ip\"),\n                this.getAttribute(\"data-dev\"),\n              );\n            else if (a === \"f\")\n              banUser(\n                u,\n                this.getAttribute(\"data-ip\"),\n                this.getAttribute(\"data-dev\"),\n              );\n            else delUser(u);\n          };\n        }\n      }\n      async function viewConvs(u) {\n        var j = await api(\n          \"/api/admin/user-convs?user=\" + encodeURIComponent(u),\n        );\n        if (!j.ok) {\n          alert(\"失败\");\n          return;\n        }\n        document.getElementById(\"ml\").innerHTML = \"\";\n        document.getElementById(\"mt\").classList.add(\"hd\");\n        document.getElementById(\"cvBox\").classList.remove(\"hd\");\n        var t = document.getElementById(\"ct\");\n        t.classList.remove(\"hd\");\n        t.textContent = u + \" 的对话\";\n        var h = \"\";\n        if (!j.convs.length) h = '<div class=\"card\">无对话</div>';\n        for (var i = 0; i < j.convs.length; i++) {\n          var c = j.convs[i];\n          var lv = c.think === true ? \"深度思考\" : c.think || \"关闭\";\n          var tags = c.web ? ' <span class=\"tg2\">🌐联网</span>' : \"\";\n          h +=\n            '<div class=\"card\"><div class=\"row\"><div><b>' +\n            esc(c.title) +\n            \"</b>\" +\n            tags +\n            '<br><span class=\"sm\">' +\n            esc(\"⚡推理强度：\" + lv) +\n            '</span><br><span class=\"sm\">' +\n            (c.t ? fmtT(c.t) : \"--\") +\n            '</span></div><button class=\"bv\" data-u=\"' +\n            esc(u) +\n            '\" data-c=\"' +\n            c.id +\n            '\">查看内容</button></div></div>';\n        }\n        var cl = document.getElementById(\"cl\");\n        cl.innerHTML = h;\n        var bs = cl.querySelectorAll(\"button[data-c]\");\n        for (var k = 0; k < bs.length; k++) {\n          bs[k].onclick = function () {\n            viewMsgs(this.getAttribute(\"data-u\"), this.getAttribute(\"data-c\"));\n          };\n        }\n        document.getElementById(\"cvBox\").scrollIntoView();\n      }\n      async function viewMsgs(u, id) {\n        var j = await api(\n          \"/api/admin/conv?user=\" +\n            encodeURIComponent(u) +\n            \"&id=\" +\n            encodeURIComponent(id),\n        );\n        if (!j.ok) {\n          alert(\"失败\");\n          return;\n        }\n        var t = document.getElementById(\"mt\");\n        t.classList.remove(\"hd\");\n        t.textContent = \"对话内容\";\n        var h = \"\";\n        for (var i = 0; i < j.messages.length; i++) {\n          var m = j.messages[i];\n          var txt = Array.isArray(m.content)\n            ? m.content\n                .map(function (p) {\n                  return p.type === \"text\" ? p.text : \"[图片]\";\n                })\n                .join(\"\")\n            : String(m.content || \"\");\n          h +=\n            '<div class=\"msg ' +\n            m.role +\n            '\"><div class=\"rl\">' +\n            (m.role === \"user\" ? \"用户\" : \"AI\") +\n            (m.t ? \" <span>\" + fmtT(m.t) + \"</span>\" : \"\") +\n            \"</div>\" +\n            esc(txt).replace(/\\n/g, \"<br>\") +\n            \"</div>\";\n        }\n        document.getElementById(\"ml\").innerHTML =\n          h || '<div class=\"card\">空</div>';\n        t.scrollIntoView();\n      }\n      async function delUser(u) {\n        if (!confirm(\"删除 \" + u + \" 及所有记录？不可恢复！\")) return;\n        var r = await fetch(\n          \"/api/admin/delete-user?key=\" + encodeURIComponent(K),\n          {\n            method: \"POST\",\n            headers: { \"Content-Type\": \"application/json\" },\n            body: JSON.stringify({ user: u }),\n          },\n        );\n        var j = await r.json();\n        if (j.ok) {\n          doLogin();\n        } else {\n          alert(j.error || \"失败\");\n        }\n      }\n      async function blockUser(u, ip, dev) {\n        if (!ip && !dev) {\n          alert(\"该用户无IP/设备记录\");\n          return;\n        }\n        var reason = prompt(\"拉黑 \" + u + \" 的理由（可空）:\", \"\");\n        if (reason === null) return;\n        reason = reason.trim().slice(0, 100);\n        if (ip) {\n          await fetch(\"/api/admin/blacklist?key=\" + encodeURIComponent(K), {\n            method: \"POST\",\n            headers: { \"Content-Type\": \"application/json\" },\n            body: JSON.stringify({\n              type: \"ip\",\n              value: ip,\n              username: u,\n              reason: reason,\n            }),\n          });\n        }\n        if (dev) {\n          await fetch(\"/api/admin/blacklist?key=\" + encodeURIComponent(K), {\n            method: \"POST\",\n            headers: { \"Content-Type\": \"application/json\" },\n            body: JSON.stringify({\n              type: \"device\",\n              value: dev,\n              username: u,\n              reason: reason,\n            }),\n          });\n        }\n        alert(\"已拉黑\");\n        loadBlacklist();\n      }\n      async function loadBlacklist() {\n        var j = await api(\"/api/admin/blacklist\");\n        if (!j.ok) return;\n        var h = \"\";\n        if (!j.list.length) h = '<div class=\"card\">黑名单为空</div>';\n        for (var i = 0; i < j.list.length; i++) {\n          var b = j.list[i];\n          h +=\n            '<div class=\"card bcard\" data-t=\"' +\n            esc(b.type) +\n            '\" data-v=\"' +\n            esc(b.value) +\n            '\"><div class=\"row\"><div><b>' +\n            (b.type === \"ip\" ? \"IP\" : \"设备\") +\n            \"</b> \" +\n            esc(b.value) +\n            '<br><span class=\"sm\">' +\n            esc(b.username || \"--\") +\n            \" | \" +\n            fmtT(b.t) +\n            \"</span>\" +\n            (b.reason\n              ? '<br><span class=\"sm\" style=\"color:#ffb020\">理由: ' +\n                esc(b.reason) +\n                \"</span>\"\n              : \"\") +\n            '</div><button class=\"bv\" data-t=\"' +\n            esc(b.type) +\n            '\" data-v=\"' +\n            esc(b.value) +\n            '\">解除</button></div></div>';\n        }\n        var el = document.getElementById(\"bl\");\n        el.innerHTML = h;\n        bindSelB();\n        var bs = el.querySelectorAll(\"button[data-v]\");\n        for (var k = 0; k < bs.length; k++) {\n          bs[k].onclick = function () {\n            unblock(this.getAttribute(\"data-t\"), this.getAttribute(\"data-v\"));\n          };\n        }\n      }\n      async function unblock(t, v) {\n        if (!confirm(\"解除拉黑 \" + v + \"？\")) return;\n        var r = await fetch(\n          \"/api/admin/blacklist?key=\" +\n            encodeURIComponent(K) +\n            \"&type=\" +\n            t +\n            \"&value=\" +\n            encodeURIComponent(v),\n          { method: \"DELETE\" },\n        );\n        var j = await r.json();\n        if (j.ok) loadBlacklist();\n        else alert(\"失败\");\n      }\n      document.getElementById(\"cvClose\").onclick = function () {\n        document.getElementById(\"cvBox\").classList.add(\"hd\");\n        document.getElementById(\"cl\").innerHTML = \"\";\n        document.getElementById(\"ml\").innerHTML = \"\";\n      };\n      document.getElementById(\"goBtn\").onclick = doLogin;\n      document.getElementById(\"rfBtn\").onclick = doLogin;\n      document.getElementById(\"blBtn\").onclick = loadBlacklist;\n      var DELC = null;\n      function showSummary(us) {\n        var tot = 0, est = false, sr = 0, cv = 0;\n        var dc = DELC && +DELC.cost > 0 ? +DELC.cost : 0;\n        tot += dc;\n        for (var i = 0; i < us.length; i++) {\n          tot += +us[i].cost || 0;\n          if (us[i].est) est = true;\n          sr += +us[i].search || 0;\n          cv += +us[i].convs || 0;\n        }\n        document.getElementById(\"sumCost\").textContent = fmtCost(tot);\n        document.getElementById(\"sumNote\").textContent = (est ? \"含旧记录估算\" : \"按记账时价格\") + (dc ? \"，含已删用户 \" + fmtCost(dc) : \"\");\n        document.getElementById(\"sumUsers\").textContent = us.length + \" 人\";\n        document.getElementById(\"sumConvs\").textContent = cv + \" 个对话\";\n        document.getElementById(\"sumSearch\").textContent = sr;\n      }\n      (function () {\n        var tb = document.getElementById(\"tabs\");\n        var tbEnd = function () { tb.classList.toggle(\"end\", tb.scrollLeft + tb.clientWidth >= tb.scrollWidth - 4); };\n        tb.addEventListener(\"scroll\", tbEnd);\n        window.addEventListener(\"resize\", tbEnd);\n        setTimeout(tbEnd, 0);\n        var ts = document.querySelectorAll(\"#tabs .tab\");\n        for (var i = 0; i < ts.length; i++) {\n          ts[i].onclick = function () {\n            var id = this.getAttribute(\"data-p\");\n            for (var k = 0; k < ts.length; k++) ts[k].classList.toggle(\"on\", ts[k] === this);\n            var ps = document.querySelectorAll(\".pane\");\n            for (var k = 0; k < ps.length; k++) ps[k].classList.toggle(\"on\", ps[k].id === \"p_\" + id);\n            try { sessionStorage.setItem(\"ds_admin_tab\", id); } catch (e) {}\n            try { this.scrollIntoView({ inline: \"nearest\", block: \"nearest\" }); } catch (e) {}\n            window.scrollTo(0, 0);\n          };\n        }\n        try {\n          var last = sessionStorage.getItem(\"ds_admin_tab\");\n          if (last) { var b = document.querySelector('#tabs .tab[data-p=\"' + last + '\"]'); if (b) b.click(); }\n        } catch (e) {}\n      })();\n      var PR_IDS = { pr_fh: \"flash_hit\", pr_fi: \"flash_miss\", pr_fo: \"flash_out\", pr_ph: \"pro_hit\", pr_pi: \"pro_miss\", pr_po: \"pro_out\", pr_pk: \"peak_mult\", pr_sr: \"search\" };\n      var PR_DEF = { flash_hit: 0.02, flash_miss: 1, flash_out: 4, pro_hit: 0.15, pro_miss: 4.5, pro_out: 13.5, peak_mult: 2, search: 5 };\n      function fillPricing(p) {\n        for (var id in PR_IDS) { var k = PR_IDS[id]; document.getElementById(id).value = p[k] != null ? p[k] : PR_DEF[k]; }\n        document.getElementById(\"pr_hd\").value = Array.isArray(p.holidays) ? p.holidays.join(\",\") : \"\";\n      }\n      function fmtCost(c) {\n        c = +c || 0;\n        return \"¥\" + (c > 0 && c < 0.01 ? c.toFixed(4) : c.toFixed(2));\n      }\n      async function loadPricing() {\n        var j = await api(\"/api/admin/pricing\");\n        if (!j.ok || !j.pricing) return;\n        fillPricing(j.pricing);\n      }\n      document.getElementById(\"prDef\").onclick = function () {\n        fillPricing(PR_DEF);\n        var m = document.getElementById(\"prMsg\");\n        m.textContent = \"已填入官方价，点保存生效\";\n        m.style.color = \"#9a9aa3\";\n      };\n      document.getElementById(\"prSave\").onclick = async function () {\n        var b = {};\n        for (var id in PR_IDS) b[PR_IDS[id]] = document.getElementById(id).value;\n        b.holidays = document.getElementById(\"pr_hd\").value;\n        var r = await fetch(\"/api/admin/pricing?key=\" + encodeURIComponent(K), {\n          method: \"POST\",\n          headers: { \"Content-Type\": \"application/json\" },\n          body: JSON.stringify(b),\n        });\n        var j = await r.json();\n        var m = document.getElementById(\"prMsg\");\n        if (j.ok) {\n          m.textContent = \"已保存，以后的对话按新价格记账\" + (j.badHolidays && j.badHolidays.length ? \"；以下日期不合法已忽略：\" + j.badHolidays.join(\"、\") : \"\");\n          m.style.color = j.badHolidays && j.badHolidays.length ? \"#ffb020\" : \"#22c55e\";\n          fillPricing(j.pricing);\n          var jj = await api(\"/api/admin/users\");\n          if (jj.ok) { DELC = jj.deleted || null; showUsers(jj.users); }\n        } else {\n          m.textContent = j.error || \"保存失败\";\n          m.style.color = \"#ff8ba0\";\n        }\n      };\n      async function loadBalance() {\n        var el = document.getElementById(\"balInfo\");\n        el.textContent = \"查询中…\";\n        var j = await api(\"/api/admin/balance\");\n        if (!j.ok) {\n          el.textContent = j.error || \"查询失败\";\n          return;\n        }\n        if (!j.balances.length) {\n          el.textContent = \"无余额信息\";\n          return;\n        }\n        var h = j.balances\n          .map(function (b) {\n            return (\n              b.currency +\n              \" \" +\n              b.total +\n              \"（充值 \" +\n              b.topped +\n              \" / 赠送 \" +\n              b.granted +\n              \"）\"\n            );\n          })\n          .join(\"；\");\n        el.textContent = h + (j.is_available ? \"\" : \"（余额不足）\");\n        var b0 = j.balances[0];\n        document.getElementById(\"balV\").textContent = (b0.currency === \"CNY\" ? \"¥\" : b0.currency + \" \") + b0.total;\n        el.textContent = \"充值 \" + b0.topped + \" / 赠送 \" + b0.granted + (j.is_available ? \"\" : \"（余额不足）\");\n      }\n      document.getElementById(\"balBtn\").onclick = loadBalance;\n      async function loadSysp() {\n        var j = await api(\"/api/admin/sysprompt\");\n        if (j.ok) {\n          document.getElementById(\"sysp\").value = j.prompt || \"\";\n          var m = document.getElementById(\"syspMsg\");\n          if (m)\n            m.textContent = j.prompt ? \"当前已设置预设提示词\" : \"当前未设置\";\n        }\n      }\n      document.getElementById(\"syspSave\").onclick = async function () {\n        var v = document.getElementById(\"sysp\").value.trim().slice(0, 4000);\n        var r = await fetch(\n          \"/api/admin/sysprompt?key=\" + encodeURIComponent(K),\n          {\n            method: \"POST\",\n            headers: { \"Content-Type\": \"application/json\" },\n            body: JSON.stringify({ prompt: v }),\n          },\n        );\n        var j = await r.json();\n        var m = document.getElementById(\"syspMsg\");\n        if (j.ok) {\n          m.textContent = v ? \"已保存，即刻生效\" : \"已清空，预设提示词关闭\";\n          m.style.color = \"#22c55e\";\n        } else {\n          m.textContent = j.error || \"保存失败\";\n          m.style.color = \"#ff8ba0\";\n        }\n      };\n      document.getElementById(\"syspLoad\").onclick = loadSysp;\n      document.getElementById(\"banBtn\").onclick = loadBans;\n      var selBan = {};\n      function updSelBan() {\n        var n = Object.keys(selBan).length;\n        var e = document.getElementById(\"selBanCount\");\n        if (e) e.textContent = n ? \"已选 \" + n + \" 条\" : \"\";\n      }\n      function banDaysLabel(d) {\n        return d === 1\n          ? \"一天\"\n          : d === 3\n            ? \"三天\"\n            : d === 5\n              ? \"五天\"\n              : d === 30\n                ? \"一个月\"\n                : d === 365\n                  ? \"一年\"\n                  : d + \"天\";\n      }\n      async function banUser(u, ip, dev) {\n        var c = prompt(\n          \"封禁 \" +\n            u +\n            \"，请选择时长：\\n1. 一天\\n2. 三天\\n3. 五天\\n4. 一个月\\n5. 一年\",\n          \"1\",\n        );\n        if (c === null) return;\n        var days = { 1: 1, 2: 3, 3: 5, 4: 30, 5: 365 }[c.trim()];\n        if (!days) {\n          alert(\"请输入 1-5\");\n          return;\n        }\n        var reason = prompt(\"封禁理由（可空）:\", \"\");\n        if (reason === null) return;\n        reason = reason.trim().slice(0, 100);\n        var j = await postJ(\"/api/admin/ban\", {\n          username: u,\n          days: days,\n          reason: reason,\n        });\n        if (!j.ok) {\n          alert(j.error || \"失败\");\n          return;\n        }\n        var items = [];\n        if (ip)\n          items.push({ type: \"ip\", value: ip, username: u, reason: reason });\n        if (dev)\n          items.push({\n            type: \"device\",\n            value: dev,\n            username: u,\n            reason: reason,\n          });\n        if (items.length) await postJ(\"/api/admin/blacklist\", { items: items });\n        alert(\n          \"已封禁 \" +\n            banDaysLabel(days) +\n            (items.length ? \"，IP/设备已同步拉黑\" : \"\"),\n        );\n        loadBans();\n        loadBlacklist();\n      }\n      async function loadBans() {\n        var j = await api(\"/api/admin/bans\");\n        if (!j.ok) return;\n        var h = \"\";\n        if (!j.list.length) h = '<div class=\"card\">封禁名单为空</div>';\n        for (var i = 0; i < j.list.length; i++) {\n          var b = j.list[i];\n          h +=\n            '<div class=\"card bancard\" data-u=\"' +\n            esc(b.username) +\n            '\"><div class=\"row\"><div><b>' +\n            esc(b.username) +\n            \"</b> 封禁\" +\n            banDaysLabel(b.days) +\n            '<br><span class=\"sm\">解封：' +\n            fmtT(b.until) +\n            \"</span>\" +\n            (b.reason\n              ? '<br><span class=\"sm\" style=\"color:#ffb020\">理由: ' +\n                esc(b.reason) +\n                \"</span>\"\n              : \"\") +\n            '</div><button class=\"bv\" data-u=\"' +\n            esc(b.username) +\n            '\">解除</button></div></div>';\n        }\n        document.getElementById(\"banl\").innerHTML = h;\n        bindSelBan();\n        var bs = document\n          .getElementById(\"banl\")\n          .querySelectorAll(\"button[data-u]\");\n        for (var k = 0; k < bs.length; k++) {\n          bs[k].onclick = function () {\n            unbanUser(this.getAttribute(\"data-u\"));\n          };\n        }\n      }\n      async function unbanUser(u) {\n        if (!confirm(\"解除封禁 \" + u + \"？\")) return;\n        var r = await fetch(\"/api/admin/ban?key=\" + encodeURIComponent(K), {\n          method: \"DELETE\",\n          headers: { \"Content-Type\": \"application/json\" },\n          body: JSON.stringify({ username: u }),\n        });\n        var j = await r.json();\n        if (j.ok) loadBans();\n        else alert(\"失败\");\n      }\n      function bindSelBan() {\n        var cs = document.getElementById(\"banl\").querySelectorAll(\".bancard\");\n        for (var i = 0; i < cs.length; i++) {\n          var c = cs[i];\n          if (selBan[c.getAttribute(\"data-u\")]) c.classList.add(\"sel\");\n          c.onclick = function (e) {\n            if (e.target.closest(\"button\")) return;\n            var u = this.getAttribute(\"data-u\");\n            if (this.classList.contains(\"sel\")) {\n              this.classList.remove(\"sel\");\n              delete selBan[u];\n            } else {\n              this.classList.add(\"sel\");\n              selBan[u] = 1;\n            }\n            updSelBan();\n          };\n        }\n        updSelBan();\n      }\n      document.getElementById(\"bSelBan\").onclick = function () {\n        var cs = document.getElementById(\"banl\").querySelectorAll(\".bancard\");\n        selBan = {};\n        for (var i = 0; i < cs.length; i++) {\n          cs[i].classList.add(\"sel\");\n          selBan[cs[i].getAttribute(\"data-u\")] = 1;\n        }\n        updSelBan();\n      };\n      document.getElementById(\"bCanBan\").onclick = function () {\n        selBan = {};\n        var cs = document.getElementById(\"banl\").querySelectorAll(\".bancard\");\n        for (var i = 0; i < cs.length; i++) cs[i].classList.remove(\"sel\");\n        updSelBan();\n      };\n      document.getElementById(\"bUnbBan\").onclick = async function () {\n        var us = Object.keys(selBan);\n        if (!us.length) {\n          alert(\"请先点选\");\n          return;\n        }\n        if (!confirm(\"解除 \" + us.length + \" 个封禁？\")) return;\n        var r = await fetch(\"/api/admin/ban?key=\" + encodeURIComponent(K), {\n          method: \"DELETE\",\n          headers: { \"Content-Type\": \"application/json\" },\n          body: JSON.stringify({ usernames: us }),\n        });\n        var j = await r.json();\n        if (j.ok) {\n          selBan = {};\n          loadBans();\n        } else alert(\"失败\");\n      };\n      document.getElementById(\"bBanU\").onclick = async function () {\n        var us = Object.keys(selU);\n        if (!us.length) {\n          alert(\"请先点选用户卡片\");\n          return;\n        }\n        var c = prompt(\n          \"封禁 \" +\n            us.length +\n            \" 个用户，请选择时长：\\n1. 一天\\n2. 三天\\n3. 五天\\n4. 一个月\\n5. 一年\",\n          \"1\",\n        );\n        if (c === null) return;\n        var days = { 1: 1, 2: 3, 3: 5, 4: 30, 5: 365 }[c.trim()];\n        if (!days) {\n          alert(\"请输入 1-5\");\n          return;\n        }\n        var reason = prompt(\"封禁理由（可空）:\", \"\");\n        if (reason === null) return;\n        reason = reason.trim().slice(0, 100);\n        var bans = [];\n        var items = [];\n        for (var i = 0; i < us.length; i++) {\n          bans.push({ username: us[i], days: days, reason: reason });\n          var x = selU[us[i]];\n          if (x.ip)\n            items.push({\n              type: \"ip\",\n              value: x.ip,\n              username: us[i],\n              reason: reason,\n            });\n          if (x.dev)\n            items.push({\n              type: \"device\",\n              value: x.dev,\n              username: us[i],\n              reason: reason,\n            });\n        }\n        var j = await postJ(\"/api/admin/ban\", { bans: bans });\n        if (!j.ok) {\n          alert(j.error || \"失败\");\n          return;\n        }\n        if (items.length) await postJ(\"/api/admin/blacklist\", { items: items });\n        alert(\n          \"已封禁 \" +\n            us.length +\n            \" 个用户 \" +\n            banDaysLabel(days) +\n            (items.length ? \"，IP/设备已同步拉黑\" : \"\"),\n        );\n        loadBans();\n        loadBlacklist();\n      };\n      var selU = {},\n        selF = {},\n        selB = {};\n      function updSelU() {\n        var n = Object.keys(selU).length;\n        var e = document.getElementById(\"selUCount\");\n        if (e) e.textContent = n ? \"已选 \" + n + \" 个\" : \"\";\n      }\n      function updSelF() {\n        var n = Object.keys(selF).length;\n        var e = document.getElementById(\"selFCount\");\n        if (e) e.textContent = n ? \"已选 \" + n + \" 条\" : \"\";\n      }\n      function updSelB() {\n        var n = Object.keys(selB).length;\n        var e = document.getElementById(\"selBCount\");\n        if (e) e.textContent = n ? \"已选 \" + n + \" 条\" : \"\";\n      }\n      function toggleCard(c, map, key, get) {\n        if (c.classList.contains(\"sel\")) {\n          c.classList.remove(\"sel\");\n          delete map[key];\n        } else {\n          c.classList.add(\"sel\");\n          map[key] = get();\n        }\n      }\n      function bindSelU() {\n        var cs = document.getElementById(\"ul\").querySelectorAll(\".ucard\");\n        for (var i = 0; i < cs.length; i++) {\n          var c = cs[i];\n          if (selU[c.getAttribute(\"data-u\")]) c.classList.add(\"sel\");\n          c.onclick = function (e) {\n            if (e.target.closest(\"button\")) return;\n            var u = this.getAttribute(\"data-u\");\n            toggleCard(\n              this,\n              selU,\n              u,\n              function () {\n                return {\n                  ip: this.getAttribute(\"data-ip\"),\n                  dev: this.getAttribute(\"data-dev\"),\n                };\n              }.bind(this),\n            );\n            updSelU();\n          };\n        }\n        updSelU();\n      }\n      function bindSelB() {\n        var cs = document.getElementById(\"bl\").querySelectorAll(\".bcard\");\n        for (var i = 0; i < cs.length; i++) {\n          var c = cs[i];\n          var k = c.getAttribute(\"data-t\") + \":\" + c.getAttribute(\"data-v\");\n          if (selB[k]) c.classList.add(\"sel\");\n          c.onclick = function (e) {\n            if (e.target.closest(\"button\")) return;\n            var kk =\n              this.getAttribute(\"data-t\") + \":\" + this.getAttribute(\"data-v\");\n            toggleCard(\n              this,\n              selB,\n              kk,\n              function () {\n                return {\n                  t: this.getAttribute(\"data-t\"),\n                  v: this.getAttribute(\"data-v\"),\n                };\n              }.bind(this),\n            );\n            updSelB();\n          };\n        }\n        updSelB();\n      }\n      function bindSelF() {\n        var cs = document.getElementById(\"fl\").querySelectorAll(\".fcard\");\n        for (var i = 0; i < cs.length; i++) {\n          var c = cs[i];\n          if (selF[c.getAttribute(\"data-id\")]) c.classList.add(\"sel\");\n          c.onclick = function (e) {\n            if (e.target.closest(\"button\") || e.target.closest(\"a\")) return;\n            var fid = this.getAttribute(\"data-id\");\n            toggleCard(this, selF, fid, function () {\n              return 1;\n            });\n            updSelF();\n          };\n        }\n        updSelF();\n      }\n      function clearSel(cls, map, upd) {\n        selU = cls === \"u\" ? {} : selU;\n        selF = cls === \"f\" ? {} : selF;\n        selB = cls === \"b\" ? {} : selB;\n        var cs = document.querySelectorAll(\n          cls === \"u\" ? \".ucard\" : cls === \"f\" ? \".fcard\" : \".bcard\",\n        );\n        for (var i = 0; i < cs.length; i++) cs[i].classList.remove(\"sel\");\n        upd();\n      }\n      async function postJ(p, b) {\n        var r = await fetch(p + \"?key=\" + encodeURIComponent(K), {\n          method: \"POST\",\n          headers: { \"Content-Type\": \"application/json\" },\n          body: JSON.stringify(b),\n        });\n        return r.json();\n      }\n      document.getElementById(\"bSelU\").onclick = function () {\n        var cs = document.getElementById(\"ul\").querySelectorAll(\".ucard\");\n        selU = {};\n        for (var i = 0; i < cs.length; i++) {\n          cs[i].classList.add(\"sel\");\n          var u = cs[i].getAttribute(\"data-u\");\n          selU[u] = {\n            ip: cs[i].getAttribute(\"data-ip\"),\n            dev: cs[i].getAttribute(\"data-dev\"),\n          };\n        }\n        updSelU();\n      };\n      document.getElementById(\"bCanU\").onclick = function () {\n        clearSel(\"u\", selU, updSelU);\n      };\n      document.getElementById(\"bDelU\").onclick = async function () {\n        var us = Object.keys(selU);\n        if (!us.length) {\n          alert(\"请先点选用户卡片\");\n          return;\n        }\n        if (!confirm(\"删除 \" + us.length + \" 个用户及所有记录？不可恢复！\"))\n          return;\n        var j = await postJ(\"/api/admin/delete-user\", { users: us });\n        if (j.ok) {\n          selU = {};\n          doLogin();\n        } else alert(j.error || \"失败\");\n      };\n      document.getElementById(\"bBlkU\").onclick = async function () {\n        var us = Object.keys(selU),\n          items = [];\n        for (var i = 0; i < us.length; i++) {\n          var x = selU[us[i]];\n          if (x.ip) items.push({ type: \"ip\", value: x.ip, username: us[i] });\n          if (x.dev)\n            items.push({ type: \"device\", value: x.dev, username: us[i] });\n        }\n        if (!us.length) {\n          alert(\"请先点选用户卡片\");\n          return;\n        }\n        var reason = prompt(\"拉黑 \" + us.length + \" 个用户的理由（可空）:\", \"\");\n        if (reason === null) return;\n        reason = reason.trim().slice(0, 100);\n        for (var ri = 0; ri < items.length; ri++) items[ri].reason = reason;\n        if (!items.length) {\n          alert(\"所选用户无IP/设备记录\");\n          return;\n        }\n        var j = await postJ(\"/api/admin/blacklist\", { items: items });\n        if (j.ok) {\n          loadBlacklist();\n          alert(\"已拉黑\");\n        } else alert(j.error || \"失败\");\n      };\n      document.getElementById(\"bDelBlkU\").onclick = async function () {\n        var us = Object.keys(selU),\n          items = [];\n        for (var i = 0; i < us.length; i++) {\n          var x = selU[us[i]];\n          if (x.ip) items.push({ type: \"ip\", value: x.ip, username: us[i] });\n          if (x.dev)\n            items.push({ type: \"device\", value: x.dev, username: us[i] });\n        }\n        if (!us.length) {\n          alert(\"请先点选用户卡片\");\n          return;\n        }\n        var reason2 = prompt(\n          \"删除并拉黑 \" + us.length + \" 个用户的理由（可空）:\",\n          \"\",\n        );\n        if (reason2 === null) return;\n        reason2 = reason2.trim().slice(0, 100);\n        for (var rj = 0; rj < items.length; rj++) items[rj].reason = reason2;\n        if (!confirm(\"删除并拉黑 \" + us.length + \" 个用户？不可恢复！\")) return;\n        if (items.length) await postJ(\"/api/admin/blacklist\", { items: items });\n        var j = await postJ(\"/api/admin/delete-user\", { users: us });\n        if (j.ok) {\n          selU = {};\n          doLogin();\n        } else alert(j.error || \"失败\");\n      };\n      document.getElementById(\"bSelF\").onclick = function () {\n        var cs = document.getElementById(\"fl\").querySelectorAll(\".fcard\");\n        selF = {};\n        for (var i = 0; i < cs.length; i++) {\n          cs[i].classList.add(\"sel\");\n          selF[cs[i].getAttribute(\"data-id\")] = 1;\n        }\n        updSelF();\n      };\n      document.getElementById(\"bCanF\").onclick = function () {\n        clearSel(\"f\", selF, updSelF);\n      };\n      document.getElementById(\"bDelF\").onclick = async function () {\n        var ids = Object.keys(selF);\n        if (!ids.length) {\n          alert(\"请先点选反馈卡片\");\n          return;\n        }\n        if (!confirm(\"删除 \" + ids.length + \" 条反馈（含附件）？不可恢复！\"))\n          return;\n        var r = await fetch(\n          \"/api/admin/feedbacks?key=\" + encodeURIComponent(K),\n          {\n            method: \"DELETE\",\n            headers: { \"Content-Type\": \"application/json\" },\n            body: JSON.stringify({ ids: ids }),\n          },\n        );\n        var j = await r.json();\n        if (j.ok) {\n          selF = {};\n          document.getElementById(\"fbBtn\").click();\n        } else alert(j.error || \"失败\");\n      };\n      document.getElementById(\"bSelB\").onclick = function () {\n        var cs = document.getElementById(\"bl\").querySelectorAll(\".bcard\");\n        selB = {};\n        for (var i = 0; i < cs.length; i++) {\n          cs[i].classList.add(\"sel\");\n          selB[\n            cs[i].getAttribute(\"data-t\") + \":\" + cs[i].getAttribute(\"data-v\")\n          ] = {\n            t: cs[i].getAttribute(\"data-t\"),\n            v: cs[i].getAttribute(\"data-v\"),\n          };\n        }\n        updSelB();\n      };\n      document.getElementById(\"bCanB\").onclick = function () {\n        clearSel(\"b\", selB, updSelB);\n      };\n      document.getElementById(\"bUnbB\").onclick = async function () {\n        var ks = Object.keys(selB);\n        if (!ks.length) {\n          alert(\"请先点选\");\n          return;\n        }\n        if (!confirm(\"解除 \" + ks.length + \" 条拉黑？\")) return;\n        var items = [];\n        for (var i = 0; i < ks.length; i++) items.push(selB[ks[i]]);\n        var r = await fetch(\n          \"/api/admin/blacklist?key=\" + encodeURIComponent(K),\n          {\n            method: \"DELETE\",\n            headers: { \"Content-Type\": \"application/json\" },\n            body: JSON.stringify({ items: items }),\n          },\n        );\n        var j = await r.json();\n        if (j.ok) {\n          selB = {};\n          loadBlacklist();\n        } else alert(j.error || \"失败\");\n      };\n      document.getElementById(\"ki\").addEventListener(\"keydown\", function (e) {\n        if (e.key === \"Enter\") doLogin();\n      });\n      function copyFbText(i) {\n        var fbs = window._fbs || [];\n        var f = fbs[i];\n        if (!f) return;\n        var txt = f.text || \"\";\n        function ok() {\n          alert(\"已复制\");\n        }\n        function fb() {\n          var ta = document.createElement(\"textarea\");\n          ta.value = txt;\n          ta.style.position = \"fixed\";\n          ta.style.opacity = \"0\";\n          document.body.appendChild(ta);\n          ta.select();\n          try {\n            document.execCommand(\"copy\");\n            ok();\n          } catch (e) {\n            alert(\"复制失败\");\n          }\n          ta.remove();\n        }\n        if (navigator.clipboard && navigator.clipboard.writeText) {\n          navigator.clipboard.writeText(txt).then(ok, fb);\n        } else {\n          fb();\n        }\n      }\n      async function saveFbFile(url, name) {\n        try {\n          var r = await fetch(url);\n          if (!r.ok) throw 0;\n          var b = await r.blob();\n          var ou = URL.createObjectURL(b);\n          var a = document.createElement(\"a\");\n          a.href = ou;\n          a.download = name || \"file\";\n          document.body.appendChild(a);\n          a.click();\n          setTimeout(function () {\n            URL.revokeObjectURL(ou);\n            a.remove();\n          }, 4000);\n        } catch (e) {\n          alert(\"保存失败，可长按附件手动保存\");\n        }\n      }\n      function showFbFiles(i) {\n        var fbs = window._fbs || [];\n        var f = fbs[i];\n        if (!f || !f.files || !f.files.length) return;\n        var el = document.getElementById(\"fbf\" + i);\n        if (el.style.display !== \"none\") {\n          el.style.display = \"none\";\n          return;\n        }\n        var h = \"\";\n        for (var k = 0; k < f.files.length; k++) {\n          var fl = f.files[k];\n          var url =\n            \"/api/admin/feedback-file?key=\" +\n            encodeURIComponent(K) +\n            \"&k=\" +\n            encodeURIComponent(fl.key);\n          var nm = esc(fl.name || \"附件\");\n          var nmJs = esc(String(fl.name || \"附件\").replace(/[\\\\'\"<>&\\r\\n`]/g, \"\"));\n          if ((fl.type || \"\").indexOf(\"image/\") === 0) {\n            h +=\n              '<div style=\"margin-bottom:8px\"><img src=\"' +\n              url +\n              '\" style=\"max-width:100%;border-radius:8px\"><br><button class=\"bv\" style=\"padding:4px 10px;font-size:12px\" onclick=\"saveFbFile(\\'' +\n              url +\n              \"','\" +\n              nmJs +\n              '\\')\">保存图片</button> <a href=\"' +\n              url +\n              '\" target=\"_blank\" class=\"blue\">' +\n              nm +\n              \"</a></div>\";\n          } else if ((fl.type || \"\").indexOf(\"video/\") === 0) {\n            h +=\n              '<div style=\"margin-bottom:8px\"><video src=\"' +\n              url +\n              '\" controls style=\"max-width:100%;border-radius:8px\"></video><br><button class=\"bv\" style=\"padding:4px 10px;font-size:12px\" onclick=\"saveFbFile(\\'' +\n              url +\n              \"','\" +\n              nmJs +\n              '\\')\">保存视频</button> <span class=\"sm\">' +\n              nm +\n              \"</span></div>\";\n          } else {\n            h +=\n              '<div><a href=\"' +\n              url +\n              '\" target=\"_blank\" class=\"blue\">附件: ' +\n              nm +\n              \"</a></div>\";\n          }\n        }\n        el.innerHTML = h;\n        el.style.display = \"block\";\n      }\n      document.getElementById(\"fbBtn\").onclick = async function () {\n        var _fs = document.getElementById(\"fbSite\");\n        var _sv = _fs ? _fs.value : \"[DeepSeek站]\";\n        var j = await api(\n          \"/api/admin/feedbacks?site=\" + encodeURIComponent(_sv),\n        );\n        if (!j.ok) {\n          alert(\"失败\");\n          return;\n        }\n        window._fbs = j.feedbacks;\n        var h = \"\";\n        if (!j.feedbacks.length) h = '<div class=\"card\">暂无反馈</div>';\n        for (var i = 0; i < j.feedbacks.length; i++) {\n          var f = j.feedbacks[i];\n          var txt = esc(f.text).replace(/\\n/g, \"<br>\");\n          var short = txt.length > 150;\n          h +=\n            '<div class=\"card fcard\" data-id=\"' +\n            esc(f.id) +\n            '\"><div class=\"fb-txt' +\n            (short ? \" clamp\" : \"\") +\n            '\" id=\"fbt' +\n            i +\n            '\">' +\n            txt +\n            \"</div>\" +\n            (short\n              ? '<a href=\"javascript:void(0)\" onclick=\"var e=document.getElementById(\\'fbt' +\n                i +\n                \"');e.classList.toggle('clamp');this.textContent=e.classList.contains('clamp')?'展开全文':'收起'\\\" style=\\\"color:#4a9eff;font-size:12px\\\">展开全文</a>\"\n              : \"\") +\n            '<div class=\"sm\" style=\"margin-top:6px\">' +\n            fmtT(f.t) +\n            \" | \" +\n            esc(f.ip || \"--\") +\n            (f.contact ? \" | \" + esc(f.contact) : \"\") +\n            ' <button class=\"bv\" style=\"padding:4px 10px;font-size:12px\" onclick=\"copyFbText(' +\n            i +\n            ')\">复制文本</button>' +\n            (f.files && f.files.length\n              ? \" | \" +\n                f.files.length +\n                '个附件 <button class=\"bv\" style=\"padding:4px 10px;font-size:12px\" onclick=\"showFbFiles(' +\n                i +\n                ')\">查看</button>'\n              : \"\") +\n            '</div><div id=\"fbf' +\n            i +\n            '\" style=\"display:none;margin-top:8px\"></div></div>';\n        }\n        document.getElementById(\"fl\").innerHTML = h;\n        bindSelF();\n      };\n      try {\n        var _km = /[?&]key=([^&]+)/.exec(location.search);\n        if (_km) {\n          document.getElementById(\"ki\").value = decodeURIComponent(_km[1]);\n          doLogin();\n        }\n      } catch (_ke) {}\n    </script>\n  </body>\n</html>\n";
   return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
 function adminAuth(request, env){
   const key = (env.FEEDBACK_ADMIN_KEY || '').trim();
   if (!key) return false;
   const url = new URL(request.url);
-  return url.searchParams.get('key') === key;
+  if (url.searchParams.get('key') !== key) return false;
+  // DeepSeek 后台的写操作只认本站页面发来的（浏览器跨站请求会带别的 Origin）。
+  // 小游戏后台（tp0k/zhijia/brake）本来就允许跨站调用（c46a270），不查
+  if (request.method !== 'GET' && request.method !== 'HEAD' && !/^\/api\/admin\/(tp0k|zhijia|brake)\//.test(url.pathname)) {
+    const og = request.headers.get('origin');
+    if (og && og !== url.origin) return false;
+  }
+  return true;
 }
-const DEFAULT_PRICING = { flash_in: 1, flash_out: 4, pro_in: 3, pro_out: 6 };
+// DeepSeek 官网价（空闲时段，元/百万 tokens；search 为元/千次成功请求）。高峰时段（北京时间工作日 9-12、14-18 点）按 peak_mult 倍
+const DEFAULT_PRICING = { flash_hit: 0.02, flash_miss: 1, flash_out: 4, pro_hit: 0.15, pro_miss: 4.5, pro_out: 13.5, peak_mult: 2, search: 5 };
+const PRICING_KEYS = Object.keys(DEFAULT_PRICING);
 async function getPricing(env){
+  const pr = Object.assign({}, DEFAULT_PRICING);
   try {
-    const v = await env.FEEDBACK_KV.get('pricing');
-    if (v) return Object.assign({}, DEFAULT_PRICING, JSON.parse(v));
+    const v = await env.FEEDBACK_KV.get('pricing2');
+    if (v) {
+      const o = JSON.parse(v);
+      for (const k of PRICING_KEYS) { const n = Number(o[k]); if (isFinite(n) && n >= 0) pr[k] = n; }
+      if (Array.isArray(o.holidays)) pr.holidays = parseHolidays(o.holidays.join(','));
+    }
   } catch(e){}
-  return Object.assign({}, DEFAULT_PRICING);
+  if (!pr.holidays) pr.holidays = [];
+  return pr;
 }
+function parseHolidaysEx(str){
+  const ok = [], bad = [];
+  for (const t0 of String(str || '').split(/[\s,，、;；]+/)) {
+    const t = t0.trim();
+    if (!t) continue;
+    const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(t);
+    let d = '';
+    if (m) {
+      d = m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
+      const real = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toISOString().slice(0, 10);
+      if (real !== d) d = '';
+    }
+    if (!d) { if (bad.indexOf(t) < 0) bad.push(t.slice(0, 20)); continue; }
+    if (ok.indexOf(d) < 0) ok.push(d);
+  }
+  return { ok: ok.sort().slice(-200), bad: bad.slice(0, 20) };
+}
+function parseHolidays(str){ return parseHolidaysEx(str).ok; }
+// 北京时间工作日 9:00-12:00、14:00-18:00 为高峰；holidays 里的日期（YYYY-MM-DD）按空闲
+function isPeakTime(ms, holidays){
+  const d = new Date(ms + 8 * 3600 * 1000);
+  const wd = d.getUTCDay(), h = d.getUTCHours();
+  if (wd === 0 || wd === 6) return false;
+  if (holidays && holidays.length && holidays.indexOf(d.toISOString().slice(0, 10)) >= 0) return false;
+  return (h >= 9 && h < 12) || (h >= 14 && h < 18);
+}
+// 模型名 → 计价档位。新模型名请加到这里；表里没有的按名字里是否含 pro 兜底
+const MODEL_TIER = { 'deepseek-v4-pro': 'pro', 'deepseek-pro': 'pro', 'deepseek-v4-flash': 'flash', 'deepseek-flash': 'flash' };
+function modelTier(model){
+  const m = String(model || '').toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(MODEL_TIER, m)) return MODEL_TIER[m];
+  return /pro/.test(m) ? 'pro' : 'flash';
+}
+function num0(v){ v = Number(v); return isFinite(v) && v > 0 ? v : 0; }
+// 返回 { cost, est, search }：v2 记录精确按缓存/时段计；改版前的旧记录按空闲未命中价估算（est=true）
 function calcCost(tok, pricing){
-  let cost = 0;
-  const ms = (tok && tok.models) || {};
-  const fm = ms['deepseek-v4-flash'] || { p: 0, c: 0 };
-  const pm = ms['deepseek-v4-pro'] || { p: 0, c: 0 };
-  cost += (fm.p / 1e6) * pricing.flash_in + (fm.c / 1e6) * pricing.flash_out;
-  cost += (pm.p / 1e6) * pricing.pro_in + (pm.c / 1e6) * pricing.pro_out;
-  const leg = (tok && tok.legacy) || tok || { p: 0, c: 0 };
-  cost += ((leg.p || 0) / 1e6) * pricing.flash_in + ((leg.c || 0) / 1e6) * pricing.flash_out;
-  return cost;
+  let cost = 0, est = false, search = 0;
+  if (!tok || typeof tok !== 'object') return { cost: 0, est: false, search: 0 };
+  const v2 = tok.v2;
+  const oldTok = function(tier, p, c){
+    p = num0(p); c = num0(c);
+    if (p || c) est = true;
+    return (p / 1e6) * pricing[tier + '_miss'] + (c / 1e6) * pricing[tier + '_out'];
+  };
+  if (v2 && typeof v2 === 'object') {
+    // 新记录的金额在记账时已按当时价格算好（c6 = 百万分之一元，整数），改价不影响历史
+    cost += num0(v2.c6) / 1e6;
+    if (num0(v2.e6) > 0) est = true;
+    search = num0(v2.search);
+    const base = v2.base || {};
+    for (const tier of ['flash', 'pro']) { const b = base[tier] || {}; cost += oldTok(tier, b.p, b.c); }
+    return { cost, est, search };
+  }
+  // 纯旧格式
+  const ms = tok.models || {};
+  for (const name in ms) { const m = ms[name] || {}; cost += oldTok(modelTier(name), m.p, m.c); }
+  const leg = tok.models ? (tok.legacy || {}) : tok;
+  cost += oldTok('flash', leg.p, leg.c);
+  return { cost, est, search: 0 };
+}
+// 记一笔用量（usage 为 DeepSeek 返回的 usage；searched 为本次是否成功调用了联网搜索）
+function usageCost6(tier, hit, miss, out, peak, pricing){
+  const m = peak ? (num0(pricing.peak_mult) || 1) : 1;
+  const yuan = ((hit / 1e6) * pricing[tier + '_hit'] + (miss / 1e6) * pricing[tier + '_miss'] + (out / 1e6) * pricing[tier + '_out']) * m;
+  return Math.round(yuan * 1e6);
+}
+// 转正过的预记账编号表（编号 → 当时入账的估算金额），只留最近 300 条
+// pp：按真实 usage 记过账的预记账编号（编号 → 当时的估算），删号时这笔估算已并入合计的，并账时扣掉
+function stPut(obj, key, c6, field){
+  field = field || 'st';
+  const st = obj[field] && typeof obj[field] === 'object' ? obj[field] : {};
+  const now = Date.now();
+  st[key] = { c: c6, t: now };
+  // 只留 30 天内的（和预记账过期时间对齐），最多 300 条
+  for (const k of Object.keys(st)) { const v = st[k]; if (v && typeof v === 'object' && now - num0(v.t) > (PEND_TTL + 24 * 3600) * 1000) delete st[k]; }
+  const ks = Object.keys(st);
+  if (field === 'st' && ks.length > 300) for (const k of ks.slice(0, ks.length - 300)) delete st[k];
+  obj[field] = st;
+}
+function markHas(m, k){ return !!(m && k && ((Array.isArray(m.p) && m.p.indexOf(k) >= 0) || (Array.isArray(m.s) && m.s.indexOf(k) >= 0))); }
+// 已删账号名下记完一笔后，把编号补进删除标记，之后同一编号再来就跳过（尽力写，失败不影响）
+async function markAdd(kv, mkKey, mk, k){
+  if (!mk || !k) return;
+  try { const m = JSON.parse(mk); if (markHas(m, k)) return; m.s = (Array.isArray(m.s) ? m.s : []).concat([k]); await kv.put(mkKey, JSON.stringify(m), { expirationTtl: PEND_TTL + 24 * 3600 }); } catch(e){}
+}
+function stVal(v){ return v && typeof v === 'object' ? num0(v.c) : num0(v); }
+// 已删账号残留的 tokens_ 折算成金额：删号时已按估算并进合计的预记账（删除标记 p 里有），扣掉那笔估算
+async function foldCost6(kv, uname, o, pricing){
+  let c = Math.round(calcCost(o, pricing).cost * 1e6);
+  const pp = o.v2 && o.v2.pp;
+  if (pp && o.g) {
+    let mk = null; try { mk = await kv.get('udel_' + uname + '_' + o.g); } catch(e){}
+    if (mk) { try { const m = JSON.parse(mk); if (Array.isArray(m.p)) for (const k of m.p) if (pp[k] != null) c -= stVal(pp[k]); } catch(e){} }
+  }
+  return c;
+}
+// 加到「已删用户」合计。stKey：转正的预记账编号，已经记过就不再加（幂等）；takeKey：迟到的真实记账，扣掉该编号转正时的估算
+async function addDeletedCost(kv, c6, n, o2){
+  o2 = o2 || {};
+  let d = { c6: 0, n: 0 };
+  const dr = await kv.get('cost_deleted');
+  if (dr) { try { d = JSON.parse(dr) || d; } catch(e){} }
+  let add = Math.round(num0(c6));
+  if (o2.stKey) { if (d.st && d.st[o2.stKey] != null) return false; stPut(d, o2.stKey, add); }
+  if (o2.takeKey && d.st && d.st[o2.takeKey] != null) { add -= stVal(d.st[o2.takeKey]); delete d.st[o2.takeKey]; }
+  if (!add && !n && !o2.stKey) return true;
+  d.c6 = num0(d.c6) + add; d.n = num0(d.n) + num0(n);
+  await kv.put('cost_deleted', JSON.stringify(d));
+  return true;
+}
+// 账号代号：同名用户删了再注册，代号不同，旧对话的费用不会记到新账号头上（旧账号没有代号，统一当 g0）
+function newGen(){ return 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+function genOf(raw){ try { const u = typeof raw === 'string' ? JSON.parse(raw) : raw; return (u && u.g) || 'g0'; } catch(e){ return 'g0'; } }
+const PEND_TTL = 30 * 24 * 3600;      // 预记账最长保留 30 天
+const PEND_SETTLE_MS = 3600 * 1000;    // 超过 1 小时还没结掉的预记账，按估算正式入账（在后台点「对账」时做）
+// 记一笔用量：usage 为 DeepSeek 返回的 usage；searched 为本次是否成功调用了联网搜索；now 为请求开始时间（判断高峰）。
+// opts.gen：发起对话时账号的代号（读不到就不传，不做已删判断）；opts.pendKey/pendC6：这次的预记账；
+// opts.extra6 + opts.settleKey：预记账转正（按估算入账，编号记进 st，同一编号只入一次）。写成功返回 true
+async function recordUsage(kv, uname, model, usage, searched, pricing, now, opts){
+  if (!kv || !uname) return false;
+  opts = opts || {};
+  pricing = pricing || DEFAULT_PRICING;
+  now = now || Date.now();
+  const tier = modelTier(model);
+  const peak = isPeakTime(now, pricing.holidays);
+  let delta = Math.round(num0(opts.extra6)), hit = 0, miss = 0, pt = 0, ct = 0;
+  if (searched) delta += Math.round(num0(pricing.search) / 1000 * 1e6);
+  if (usage) {
+    pt = num0(usage.prompt_tokens); ct = num0(usage.completion_tokens);
+    hit = usage.prompt_cache_hit_tokens != null ? num0(usage.prompt_cache_hit_tokens)
+        : num0(usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens);
+    miss = usage.prompt_cache_miss_tokens != null ? num0(usage.prompt_cache_miss_tokens) : Math.max(0, pt - hit);
+    delta += usageCost6(tier, hit, miss, ct, peak, pricing);
+  }
+  // 账号还在不在：代号变了（删了又同名注册），或有这个代号的删除标记，都算已删除。
+  // 读用户失败、或用户记录还读不到，都当作没变（和 handleChat 读不到代号时不传 gen 一致）
+  let gone = false, mk = null;
+  if (opts.gen) {
+    let cur = opts.gen;
+    try { const ur = await kv.get('user_' + uname); if (ur) cur = genOf(ur); } catch(e){}
+    if (cur !== opts.gen) gone = true;
+    try { mk = await kv.get('udel_' + uname + '_' + opts.gen); if (mk) gone = true; } catch(e){}
+  }
+  if (gone) {
+    // 删除时已并入合计的预记账（记在删除标记里），只补差额；已转正进已删合计的，由 takeKey 扣掉
+    let prepaid = 0, m = null;
+    const mkKey = 'udel_' + uname + '_' + opts.gen;
+    if (mk) { try { m = JSON.parse(mk); } catch(e){} }
+    if (opts.pendKey && markHas(m, opts.pendKey)) prepaid = num0(opts.pendC6);
+    try {
+      // 删号时这笔预记账已并进合计或早已记过账（删除标记里有编号）：转正直接跳过
+      if (opts.settleKey && markHas(m, opts.settleKey)) return true;
+      if (opts.settleKey) { await addDeletedCost(kv, delta, 0, { stKey: opts.settleKey }); await markAdd(kv, mkKey, mk, opts.settleKey); return true; }
+      await addDeletedCost(kv, delta - prepaid, 0, prepaid ? {} : { takeKey: opts.pendKey });
+      if (opts.pendKey) await markAdd(kv, mkKey, mk, opts.pendKey);
+      return true;
+    } catch(e){ return false; }
+  }
+  let o = null;
+  try { const v = await kv.get('tokens_' + uname); if (v) o = JSON.parse(v); } catch(e){}
+  if (!o || typeof o !== 'object') o = {};
+  // tokens_ 是别的代号留下的（旧账号删除时没清干净）：先把它并进已删合计，再从头记
+  if (opts.gen && o.g && o.g !== opts.gen) {
+    try { const c = await foldCost6(kv, uname, o, pricing); if (c) await addDeletedCost(kv, c, 0); } catch(e){ return false; }
+    o = {};
+  }
+  // 转正幂等：这个编号已经入过账就什么都不做
+  if (opts.settleKey && o.v2 && ((o.v2.st && o.v2.st[opts.settleKey] != null) || (o.v2.pp && o.v2.pp[opts.settleKey] != null))) return true;
+  // 迟到的真实记账：只认 st 里明确记下的转正编号，扣掉当时的估算
+  let adj = 0;
+  if (opts.pendKey && o.v2 && o.v2.st && o.v2.st[opts.pendKey] != null) { adj = stVal(o.v2.st[opts.pendKey]); delete o.v2.st[opts.pendKey]; delta -= adj; }
+  if (!o.models) {
+    const leg = (typeof o.p === 'number') ? { p: o.p || 0, c: o.c || 0, t: o.t || 0 } : { p: 0, c: 0, t: 0 };
+    o = { models: {}, legacy: leg };
+  }
+  if (opts.gen) o.g = opts.gen;
+  if (!o.v2) {
+    // 第一次按新算法记账：把之前的总量冻结为旧记录（按 flash/pro 归类）
+    const base = { flash: { p: 0, c: 0 }, pro: { p: 0, c: 0 } };
+    for (const name in o.models) { const m = o.models[name] || {}; const b = base[modelTier(name)]; b.p += num0(m.p); b.c += num0(m.c); }
+    base.flash.p += num0(o.legacy && o.legacy.p); base.flash.c += num0(o.legacy && o.legacy.c);
+    o.v2 = { since: now, base: base, flash: {}, pro: {}, search: 0, c6: 0 };
+  }
+  if (searched) o.v2.search = num0(o.v2.search) + 1;
+  o.v2.c6 = num0(o.v2.c6) + delta;
+  if (opts.extra6) o.v2.e6 = num0(o.v2.e6) + Math.round(num0(opts.extra6));
+  if (adj) o.v2.e6 = Math.max(0, num0(o.v2.e6) - adj);
+  if (opts.settleKey) stPut(o.v2, opts.settleKey, Math.round(num0(opts.extra6)));
+  if (opts.pendKey && opts.pendC6) stPut(o.v2, opts.pendKey, Math.round(num0(opts.pendC6)), 'pp');
+  if (usage) {
+    const slot = peak ? 'pk' : 'op';
+    const b = o.v2[tier] || (o.v2[tier] = {});
+    const x = b[slot] || (b[slot] = { hit: 0, miss: 0, out: 0, n: 0 });
+    x.hit += hit; x.miss += miss; x.out += ct; x.n = (x.n || 0) + 1;
+    const mm = o.models[model] || (o.models[model] = { p: 0, c: 0, t: 0 });
+    mm.p += pt; mm.c += ct; mm.t += (pt + ct);
+  }
+  try { await kv.put('tokens_' + uname, JSON.stringify(o)); return true; } catch(e){ return false; }
+}
+// 进行中的对话预记账（pend_<用户>_<id>，金额、时间、代号放在 metadata）。拿到 usage 记账成功后删除；
+// 没删掉的在用户列表里按估算显示；超过 1 小时的在「对账」时转正
+async function listPending(kv, prefix){
+  const out = [];
+  const now = Date.now();
+  let cursor = undefined;
+  do {
+    const res = await kv.list({ prefix: prefix, cursor: cursor });
+    for (const k of res.keys) {
+      let md = k.metadata || null;
+      if (!md || md.c6 == null) { try { const v = await kv.get(k.name); if (v) md = JSON.parse(v); } catch(e){} }
+      md = md || {};
+      const t = num0(md.t);
+      if (t && now - t > PEND_TTL * 1000) continue;
+      const rest = k.name.slice(5); const i = rest.indexOf('_');
+      out.push({ name: k.name, user: i > 0 ? rest.slice(0, i) : rest, c6: num0(md.c6), t: t, g: md.g || '', m: md.m || '' });
+    }
+    cursor = res.list_complete ? undefined : res.cursor;
+  } while (cursor);
+  return out;
+}
+// 预记账转正：按估算入账（账号还在记到账号上并标估算，已删进已删合计），编号记进 st 防重复，然后删掉
+async function settlePending(kv, x, pricing){
+  const ok = await recordUsage(kv, x.user, x.m || 'deepseek-v4-flash', null, false, pricing, x.t || Date.now(), { gen: x.g || undefined, extra6: x.c6, settleKey: x.name });
+  if (ok) { try { await kv.delete(x.name); } catch(e){} }
+  return ok;
 }
 async function handleAdminPricing(request, env){
   if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
@@ -278,10 +508,14 @@ async function handleAdminPricing(request, env){
     let body = {};
     try { body = await request.json(); } catch { return json({ ok: false, error: '格式错误' }, 400); }
     const num = function(v){ const n = parseFloat(v); return (isFinite(n) && n >= 0) ? n : 0; };
-    const pr = { flash_in: num(body.flash_in), flash_out: num(body.flash_out), pro_in: num(body.pro_in), pro_out: num(body.pro_out) };
-    try { await env.FEEDBACK_KV.put('pricing', JSON.stringify(pr)); }
+    const pr = {};
+    for (const k of PRICING_KEYS) pr[k] = (body[k] === undefined || body[k] === '') ? DEFAULT_PRICING[k] : num(body[k]);
+    if (!(pr.peak_mult >= 1)) pr.peak_mult = 1;
+    const hx = parseHolidaysEx(Array.isArray(body.holidays) ? body.holidays.join(',') : body.holidays);
+    pr.holidays = hx.ok;
+    try { await env.FEEDBACK_KV.put('pricing2', JSON.stringify(pr)); }
     catch(e){ return json({ ok: false, error: '保存失败' }, 500); }
-    return json({ ok: true, pricing: pr });
+    return json({ ok: true, pricing: pr, badHolidays: hx.bad });
   }
   return json({ ok: false, error: '方法错误' }, 405);
 }
@@ -290,6 +524,10 @@ async function handleAdminUsers(request, env){
   const kv = env.FEEDBACK_KV;
   const pricing = await getPricing(env);
   const out = [];
+  const pend = {};
+  try {
+    for (const x of await listPending(kv, 'pend_')) { const q = pend[x.user] || (pend[x.user] = { c6: 0, n: 0 }); q.c6 += x.c6; q.n++; }
+  } catch(e){}
   try {
     let cursor = undefined;
     do {
@@ -305,13 +543,54 @@ async function handleAdminUsers(request, env){
         try { const ur=await kv.get(k.name); if(ur) { const uo=JSON.parse(ur); regIp2=uo.ip||''; dev=uo.dev||''; } } catch(e){}
         try { lm=await kv.get('umodel_'+uname)||''; } catch(e){}
         try { const tr=await kv.get('tokens_'+uname); if(tr) tk=JSON.parse(tr); } catch(e){}
-        out.push({ username: uname, convs: convCount, ip: regIp2, model: lm, lastT: lastT, cost: calcCost(tk, pricing), dev: dev });
+        const cc = calcCost(tk, pricing);
+        if (pend[uname]) { cc.cost += pend[uname].c6 / 1e6; cc.est = true; delete pend[uname]; }
+        out.push({ username: uname, convs: convCount, ip: regIp2, model: lm, lastT: lastT, cost: cc.cost, est: cc.est, search: cc.search, dev: dev });
       }
       cursor = res.list_complete ? undefined : res.cursor;
     } while (cursor);
   } catch(e){}
   out.sort(function(a,b){ return b.convs - a.convs; });
-  return json({ ok: true, users: out });
+  let deleted = null;
+  try { const dr = await kv.get('cost_deleted'); if (dr) { const d = JSON.parse(dr); deleted = { cost: num0(d.c6) / 1e6, n: num0(d.n) }; } } catch(e){}
+  // 已删用户残留的预记账也算进已删合计
+  for (const u in pend) { if (!deleted) deleted = { cost: 0, n: 0 }; deleted.cost += pend[u].c6 / 1e6; }
+  return json({ ok: true, users: out, deleted: deleted });
+}
+// 对账（POST）：超过 1 小时的预记账转正；已删账号被进行中对话写回的 tokens_ 并进已删合计。查看列表本身只读
+async function handleAdminReconcile(request, env){
+  if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
+  if (request.method !== 'POST') return json({ ok: false, error: '方法错误' }, 405);
+  const kv = env.FEEDBACK_KV;
+  const pricing = await getPricing(env);
+  let settled = 0, merged = 0;
+  const nowL = Date.now();
+  try {
+    for (const x of await listPending(kv, 'pend_')) {
+      if (x.t && nowL - x.t > PEND_SETTLE_MS && await settlePending(kv, x, pricing)) settled++;
+    }
+  } catch(e){}
+  // 只处理有删除标记的：tokens_ 带代号，且 udel_<用户>_<代号> 存在
+  try {
+    let c3 = undefined;
+    do {
+      const res = await kv.list({ prefix: 'tokens_', cursor: c3 });
+      for (const k of res.keys) {
+        const u = k.name.slice(7);
+        if (!/^[a-z]{1,8}$/.test(u)) continue;
+        const tr = await kv.get(k.name); if (!tr) continue;
+        let to; try { to = JSON.parse(tr); } catch(e){ continue; }
+        if (!to || !to.g || !to.v2) continue;
+        if (!(await kv.get('udel_' + u + '_' + to.g))) continue;
+        const ur = await kv.get('user_' + u);
+        if (ur && genOf(ur) === to.g) continue;
+        const c = await foldCost6(kv, u, to, pricing);
+        try { if (c) await addDeletedCost(kv, c, 0); await kv.delete(k.name); merged++; } catch(e){}
+      }
+      c3 = res.list_complete ? undefined : res.cursor;
+    } while (c3);
+  } catch(e){}
+  return json({ ok: true, settled: settled, merged: merged });
 }
 async function handleAdminUserConvs(request, env){
   if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
@@ -333,7 +612,11 @@ async function handleAdminConvView(request, env){
   return json({ ok: true, messages: Array.isArray(messages) ? messages : [] });
 }
 async function deleteUserData(kv, uname){
-  const prefixes = ['user_' + uname, 'convs_' + uname, 'conv_' + uname + '_'];
+  try { await kv.delete('tokens_' + uname); } catch(e){}
+  try { await kv.delete('umodel_' + uname); } catch(e){}
+  try { await kv.delete('user_' + uname); } catch(e){}
+  try { await kv.delete('convs_' + uname); } catch(e){}
+  const prefixes = ['conv_' + uname + '_'];
   try {
     for (const p of prefixes) {
       let cursor = undefined;
@@ -370,6 +653,41 @@ async function handleAdminDeleteUser(request, env){
     if (!/^[a-z]{1,8}$/.test(uname)) return json({ ok: false, error: '参数错误' }, 400);
     unames = [uname];
   }
+  unames = Array.from(new Set(unames));
+  if (!unames.length) return json({ ok: true, deleted: 0 });
+  // 1) 列出每人的代号和预记账，写删除标记（记下已并入合计的预记账，对话收尾时只补差额）；标记写失败整批不删
+  const pricing = await getPricing(env);
+  const info = [];
+  for (const u of unames) {
+    let g = 'g0';
+    try { const ur = await kv.get('user_' + u); if (ur) g = genOf(ur); } catch(e){}
+    let pl = [], done = [];
+    try { pl = await listPending(kv, 'pend_' + u + '_'); } catch(e){}
+    // 已经记过账的编号：st（按估算转正过）、pp（按实际记过）。这些预记账的钱已经在 tokens_ 里，不再加估算
+    try { const tr = await kv.get('tokens_' + u); if (tr) { const to = JSON.parse(tr); if (to && to.v2) done = Object.keys(to.v2.st || {}).concat(Object.keys(to.v2.pp || {})); } } catch(e){}
+    pl = pl.filter(function(q){ return done.indexOf(q.name) < 0; }).concat(pl.filter(function(q){ return done.indexOf(q.name) >= 0; }).map(function(q){ return Object.assign({}, q, { done: true }); }));
+    info.push({ u: u, g: g, pl: pl, done: done });
+  }
+  const marked = [];
+  const unmark = async function(){ for (const k of marked) { try { await kv.delete(k); } catch(e){} } };
+  for (const x of info) {
+    const mk = 'udel_' + x.u + '_' + x.g;
+    try { await kv.put(mk, JSON.stringify({ t: Date.now(), p: x.pl.filter(function(q){ return !q.done; }).map(function(q){ return q.name; }), s: x.done }), { expirationTtl: PEND_TTL + 24 * 3600 }); marked.push(mk); }
+    catch(e){ await unmark(); return json({ ok: false, error: '删除标记写入失败，没有删除，请稍后重试' }, 500); }
+  }
+  // 2) 汇总这批用户的消耗（含预记账），一次写入合计；写失败就整批不删
+  let sum = 0, n = 0;
+  const pendNames = [];
+  for (const x of info) {
+    try { const tr = await kv.get('tokens_' + x.u); if (tr) { sum += Math.round(calcCost(JSON.parse(tr), pricing).cost * 1e6); n++; } } catch(e){}
+    for (const q of x.pl) { if (!q.done) sum += q.c6; pendNames.push(q.name); }
+  }
+  try { if (sum || n) await addDeletedCost(kv, sum, n); }
+  catch(e){
+    await unmark();
+    return json({ ok: false, error: '消耗合计写入失败，没有删除，请稍后重试' }, 500);
+  }
+  for (const k of pendNames) { try { await kv.delete(k); } catch(e){} }
   for (const u of unames) await deleteUserData(kv, u);
   return json({ ok: true, deleted: unames.length });
 }
@@ -392,7 +710,7 @@ function resolveModelEffort(body) {
 }
 // MODEL_EFFORT_END
 
-async function handleChat(request, env) {
+async function handleChat(request, env, ctx) {
  try {
   const bl = await isBlacklisted(request, env);
   if (bl) return json({ ok: false, error: blackMsg(bl) }, 403);
@@ -418,6 +736,28 @@ async function handleChat(request, env) {
   const apiKey = (env.DEEPSEEK_API_KEY || '').trim();
   if (!apiKey) return json({ ok: false, error: '未配置 DeepSeek API Key：请在 Cloudflare Pages → Settings → Environment variables 添加 DEEPSEEK_API_KEY（重新部署后生效）' }, 500);
   let { model, thinking, reasoningEffort } = resolveModelEffort(body);
+  // 记账：每次请求最多记一次；写 KV 交给 waitUntil
+  const t0 = Date.now();
+  const pricing0 = await getPricing(env);
+  // 读不到用户记录（刚注册别的机房还没同步）或读失败：代号未知，不做已删判断
+  let gen0 = null;
+  try { const ur = kv && await kv.get('user_' + username); if (ur) gen0 = genOf(ur); } catch(e){}
+  let searched = false, billed = false, pendKey = '', pendP = null, pendC6 = 0;
+  // 记账。usage 为对象：按实际用量记；'fail'：上游明确出错（DeepSeek 不收 token 费），只记搜索费；
+  // 其它（正常结束却没给 usage、中途异常）：保留预记账，之后按估算入账
+  const bill = function(usage){
+    if (billed) return Promise.resolve();
+    billed = true;
+    const pr = (async function(){
+      let ok = true;
+      if (usage && typeof usage === 'object') ok = await recordUsage(kv, username, model, usage, searched, pricing0, t0, { gen: gen0 || undefined, pendKey: pendKey, pendC6: pendC6 });
+      else if (usage === 'fail') { if (searched) ok = await recordUsage(kv, username, model, null, true, pricing0, t0, { gen: gen0 || undefined, pendKey: pendKey, pendC6: pendKey ? pendC6 : 0 }); }
+      else return;
+      if (ok && pendKey) { try { await pendP; } catch(e){} try { await kv.delete(pendKey); } catch(e){} }
+    })().catch(function(){});
+    if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(pr);
+    return pr;
+  };
   try { if (kv) await kv.put('umodel_' + username, model, { expirationTtl: 90*24*3600 }); } catch(e){}
   const messages = Array.isArray(body.messages) ? body.messages.slice(-30) : [];
   if (!messages.length || !messages.some(function(m){ return m.role === 'user'; }))
@@ -449,6 +789,7 @@ async function handleChat(request, env) {
     if (!q) return json({ ok: false, error: '消息为空' }, 400);
     const sr = await deepseekSearch(q, apiKey);
     if (!sr) return json({ ok: false, error: '联网搜索失败，请稍后重试' }, 502);
+    searched = true;
     const today = new Date().toISOString().slice(0, 10);
     const ctx = '\n\n【联网搜索结果（' + today + '）】\n' + sr + '\n【要求】请结合以上最新搜索结果回答用户问题，引用信息时标注来源序号。';
     const lastUser = messages[messages.length - 1];
@@ -480,6 +821,20 @@ async function handleChat(request, env) {
   let sysPrompt = '';
   try { sysPrompt = (await kv.get('sysprompt') || '').trim().slice(0, 4000); } catch(e){}
   const finalMessages = sysPrompt ? [{ role: 'system', content: sysPrompt }].concat(clean) : clean;
+  // 预记账：搜索费 + 按输入字数估算的输入费（按未命中价，1 字约 1 token），万一断线后没等到 usage 也不至于整笔漏掉
+  if (kv) {
+    let chars = 0;
+    for (const m of finalMessages) {
+      if (typeof m.content === 'string') chars += m.content.length;
+      else for (const pt of m.content) if (pt.type === 'text') chars += String(pt.text || '').length;
+    }
+    const c6 = (searched ? Math.round(num0(pricing0.search) / 1000 * 1e6) : 0) + usageCost6(modelTier(model), 0, chars, 0, isPeakTime(t0, pricing0.holidays), pricing0);
+    pendKey = 'pend_' + username + '_' + t0.toString(36) + Math.random().toString(36).slice(2, 8);
+    pendC6 = c6;
+    const md = { c6: c6, t: t0, m: model, g: gen0 || '' };
+    pendP = kv.put(pendKey, JSON.stringify(md), { metadata: md, expirationTtl: PEND_TTL }).catch(function(){});
+    if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(pendP);
+  }
   // Flash 开推理时不能看图（实测 Load failed）：对话里带图片就自动关闭推理
   const hasImage = clean.some(function(m){ return Array.isArray(m.content) && m.content.some(function(p){ return p && p.type === 'image_url'; }); });
   if (hasImage && model === 'deepseek-v4-flash') { thinking = { type: 'disabled' }; reasoningEffort = null; }
@@ -499,47 +854,58 @@ async function handleChat(request, env) {
       if (r.status === 401) msg = 'API Key 无效，请检查 DEEPSEEK_API_KEY';
       if (r.status === 402) msg = 'DeepSeek 账户余额不足，请去 platform.deepseek.com 充值';
       if (r.status === 429) msg = '请求太频繁，请稍后再试';
+      bill('fail');
       return json({ ok: false, error: msg }, r.status);
     }
-    // 截获 usage 统计 token
-    const kv2 = env.FEEDBACK_KV;
-    const uname2 = username;
-    let buf = '';
-    const ts = new TransformStream({
-      transform(chunk, ctrl) {
-        ctrl.enqueue(chunk);
-        try {
-          buf += new TextDecoder().decode(chunk);
-          const lines = buf.split('\n');
-          buf = lines.pop() || '';
-          for (const ln of lines) {
-            const t = ln.trim();
-            if (t.startsWith('data:') && t !== 'data: [DONE]') {
-              try {
-                const j = JSON.parse(t.slice(5).trim());
-                if (j.usage && j.usage.total_tokens) {
-                  const pt = j.usage.prompt_tokens || 0, ct2 = j.usage.completion_tokens || 0;
-                  if (kv2) {
-                    kv2.get('tokens_' + uname2).then(function(v){
-                      let o = null;
-                      try { if (v) o = JSON.parse(v); } catch(e){}
-                      if (!o || !o.models) {
-                        const leg = (o && typeof o.p === 'number') ? { p: o.p || 0, c: o.c || 0, t: o.t || 0 } : { p: 0, c: 0, t: 0 };
-                        o = { models: {}, legacy: leg };
-                      }
-                      const mm = o.models[model] || (o.models[model] = { p: 0, c: 0, t: 0 });
-                      mm.p += pt; mm.c += ct2; mm.t += (pt + ct2);
-                      kv2.put('tokens_' + uname2, JSON.stringify(o)).catch(function(){});
-                    }).catch(function(){});
-                  }
-                }
-              } catch(e){}
-            }
-          }
-        } catch(e){}
+    // 截获 usage 统计 token。上游由服务端自己读到底：用户点停止或断线后也继续读，拿到 usage 再记账（交给 waitUntil）
+    let buf = '', usageDone = false, clientGone = false;
+    const dec = new TextDecoder();
+    const scan = function(text){
+      buf += text;
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const ln of lines) {
+        const t = ln.trim();
+        if (t.startsWith('data:') && t !== 'data: [DONE]') {
+          try {
+            const j = JSON.parse(t.slice(5).trim());
+            if (j.usage && j.usage.total_tokens && !usageDone) { usageDone = true; bill(j.usage); }
+          } catch(e){}
+        }
       }
-    });
-    const piped = r.body.pipeThrough(ts);
+    };
+    const tsOut = new TransformStream();
+    const writer = tsOut.writable.getWriter();
+    writer.closed.catch(function(){ clientGone = true; });
+    const reader = r.body.getReader();
+    const pump = (async function(){
+      try {
+        while (true) {
+          const rd = await reader.read();
+          if (rd.done) break;
+          if (!clientGone) {
+            // 背压：客户端读得慢就等一等，但最多等 15 秒；超时当作断线，继续把上游读完好记账
+            let tm = null;
+            const rdy = await Promise.race([
+              writer.ready.then(function(){ return 1; }, function(){ return 0; }),
+              new Promise(function(res){ tm = setTimeout(function(){ res(2); }, 15000); }),
+            ]);
+            clearTimeout(tm);
+            if (rdy !== 1) { clientGone = true; if (rdy === 2) writer.abort().catch(function(){}); }
+            if (!clientGone) writer.write(rd.value).catch(function(){ clientGone = true; });
+          }
+          try { scan(dec.decode(rd.value, { stream: true })); } catch(e){}
+        }
+        try { scan(dec.decode() + '\n'); } catch(e){}
+        if (!clientGone) await writer.close().catch(function(){});
+      } catch(e){
+        try { await writer.abort(e); } catch(e2){}
+      } finally {
+        if (!usageDone) await bill('nousage');
+      }
+    })();
+    if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(pump);
+    const piped = tsOut.readable;
     return new Response(piped, {
       headers: {
         'Content-Type': 'text/event-stream; charset=utf-8',
@@ -549,6 +915,7 @@ async function handleChat(request, env) {
       },
     });
   } catch (e) {
+    bill('fail');
     return json({ ok: false, error: '连接 DeepSeek 失败，请稍后重试' }, 502);
   }
  } catch (e) {
@@ -1561,7 +1928,8 @@ async function handleAdminFeedbackDelete(request, env){
 }
 
 function getDeviceId(request){
-  return (request.headers.get('x-device-id') || '').trim().slice(0,64);
+  const d = (request.headers.get('x-device-id') || '').trim().slice(0,64);
+  return /^[A-Za-z0-9_-]+$/.test(d) ? d : '';
 }
 async function handleAdminFeedbackFile(request, env){
   if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
@@ -1824,15 +2192,16 @@ async function handleFeedbackFile(request, env) {
 
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (url.pathname === '/api/chat' && request.method === 'POST') return handleChat(request, env);
+    if (url.pathname === '/api/chat' && request.method === 'POST') return handleChat(request, env, ctx);
     if (url.pathname === '/api/auth' && request.method === 'POST') return handleAuth(request, env);
     if (url.pathname === '/api/convs' && request.method === 'GET') return handleConvsList(request, env);
     if (url.pathname === '/api/conv' && request.method === 'GET') return handleConvGet(request, env);
     if (url.pathname === '/api/conv' && request.method === 'POST') return handleConvSave(request, env);
     if (url.pathname === '/api/conv' && request.method === 'DELETE') return handleConvDelete(request, env);
     if (url.pathname === '/api/admin/users') return handleAdminUsers(request, env);
+    if (url.pathname === '/api/admin/reconcile') return handleAdminReconcile(request, env);
     if (url.pathname === '/api/admin/user-convs') return handleAdminUserConvs(request, env);
     if (url.pathname === '/api/admin/conv') return handleAdminConvView(request, env);
     if (url.pathname === '/api/admin/delete-user' && request.method === 'POST') return handleAdminDeleteUser(request, env);
@@ -2060,6 +2429,16 @@ export default {
     if (url.pathname === '/api/feedback' && request.method === 'GET') return handleFeedbackList(request, env);
     if (url.pathname === '/api/feedback' && request.method === 'DELETE') return handleFeedbackDelete(request, env);
     if (url.pathname.startsWith('/api/fb-file/')) return handleFeedbackFile(request, env);
+    if (/^\/bg-galaxy-v\d+\.jpg$/.test(url.pathname)) {
+      // 带版本号的背景图：长缓存，换图时改文件名
+      const ar = await env.ASSETS.fetch(request);
+      if (ar.status === 304) return ar;
+      if (ar.status === 404 || ((ar.status === 200 || ar.status === 206) && !/^image\//.test(ar.headers.get('content-type') || ''))) return new Response('Not found', { status: 404 });
+      if (ar.status !== 200 && ar.status !== 206) return ar;
+      const h = new Headers(ar.headers);
+      h.set('Cache-Control', 'public, max-age=31536000, immutable');
+      return new Response(ar.body, { status: ar.status, headers: h });
+    }
     return env.ASSETS.fetch(request);
   },
 };
