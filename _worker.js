@@ -251,8 +251,9 @@ function adminAuth(request, env){
   if (!key) return false;
   const url = new URL(request.url);
   if (url.searchParams.get('key') !== key) return false;
-  // 后台的写操作只认本站页面发来的（浏览器跨站请求会带别的 Origin）
-  if (request.method !== 'GET' && request.method !== 'HEAD') {
+  // DeepSeek 后台的写操作只认本站页面发来的（浏览器跨站请求会带别的 Origin）。
+  // 小游戏后台（tp0k/zhijia/brake）本来就允许跨站调用（c46a270），不查
+  if (request.method !== 'GET' && request.method !== 'HEAD' && !/^\/api\/admin\/(tp0k|zhijia|brake)\//.test(url.pathname)) {
     const og = request.headers.get('origin');
     if (og && og !== url.origin) return false;
   }
@@ -560,8 +561,6 @@ async function handleAdminUsers(request, env){
 async function handleAdminReconcile(request, env){
   if (!adminAuth(request, env)) return json({ ok: false, error: '无权' }, 403);
   if (request.method !== 'POST') return json({ ok: false, error: '方法错误' }, 405);
-  const og = request.headers.get('origin');
-  if (og && og !== new URL(request.url).origin) return json({ ok: false, error: '来源不对' }, 403);
   const kv = env.FEEDBACK_KV;
   const pricing = await getPricing(env);
   let settled = 0, merged = 0;
