@@ -339,18 +339,22 @@ function usageCost6(tier, hit, miss, out, peak, pricing){
 function stPut(obj, key, c6, field){
   field = field || 'st';
   const st = obj[field] && typeof obj[field] === 'object' ? obj[field] : {};
-  st[key] = c6;
+  const now = Date.now();
+  st[key] = { c: c6, t: now };
+  // 只留 30 天内的（和预记账过期时间对齐），最多 300 条
+  for (const k of Object.keys(st)) { const v = st[k]; if (v && typeof v === 'object' && now - num0(v.t) > PEND_TTL * 1000) delete st[k]; }
   const ks = Object.keys(st);
   if (ks.length > 300) for (const k of ks.slice(0, ks.length - 300)) delete st[k];
   obj[field] = st;
 }
+function stVal(v){ return v && typeof v === 'object' ? num0(v.c) : num0(v); }
 // 已删账号残留的 tokens_ 折算成金额：删号时已按估算并进合计的预记账（删除标记 p 里有），扣掉那笔估算
 async function foldCost6(kv, uname, o, pricing){
   let c = Math.round(calcCost(o, pricing).cost * 1e6);
   const pp = o.v2 && o.v2.pp;
   if (pp && o.g) {
     let mk = null; try { mk = await kv.get('udel_' + uname + '_' + o.g); } catch(e){}
-    if (mk) { try { const m = JSON.parse(mk); if (Array.isArray(m.p)) for (const k of m.p) if (pp[k] != null) c -= num0(pp[k]); } catch(e){} }
+    if (mk) { try { const m = JSON.parse(mk); if (Array.isArray(m.p)) for (const k of m.p) if (pp[k] != null) c -= stVal(pp[k]); } catch(e){} }
   }
   return c;
 }
@@ -362,7 +366,7 @@ async function addDeletedCost(kv, c6, n, o2){
   if (dr) { try { d = JSON.parse(dr) || d; } catch(e){} }
   let add = Math.round(num0(c6));
   if (o2.stKey) { if (d.st && d.st[o2.stKey] != null) return false; stPut(d, o2.stKey, add); }
-  if (o2.takeKey && d.st && d.st[o2.takeKey] != null) { add -= num0(d.st[o2.takeKey]); delete d.st[o2.takeKey]; }
+  if (o2.takeKey && d.st && d.st[o2.takeKey] != null) { add -= stVal(d.st[o2.takeKey]); delete d.st[o2.takeKey]; }
   if (!add && !n && !o2.stKey) return true;
   d.c6 = num0(d.c6) + add; d.n = num0(d.n) + num0(n);
   await kv.put('cost_deleted', JSON.stringify(d));
@@ -423,7 +427,7 @@ async function recordUsage(kv, uname, model, usage, searched, pricing, now, opts
   if (opts.settleKey && o.v2 && o.v2.st && o.v2.st[opts.settleKey] != null) return true;
   // 迟到的真实记账：只认 st 里明确记下的转正编号，扣掉当时的估算
   let adj = 0;
-  if (opts.pendKey && o.v2 && o.v2.st && o.v2.st[opts.pendKey] != null) { adj = num0(o.v2.st[opts.pendKey]); delete o.v2.st[opts.pendKey]; delta -= adj; }
+  if (opts.pendKey && o.v2 && o.v2.st && o.v2.st[opts.pendKey] != null) { adj = stVal(o.v2.st[opts.pendKey]); delete o.v2.st[opts.pendKey]; delta -= adj; }
   if (!o.models) {
     const leg = (typeof o.p === 'number') ? { p: o.p || 0, c: o.c || 0, t: o.t || 0 } : { p: 0, c: 0, t: 0 };
     o = { models: {}, legacy: leg };
