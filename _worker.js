@@ -250,7 +250,13 @@ function adminAuth(request, env){
   const key = (env.FEEDBACK_ADMIN_KEY || '').trim();
   if (!key) return false;
   const url = new URL(request.url);
-  return url.searchParams.get('key') === key;
+  if (url.searchParams.get('key') !== key) return false;
+  // 后台的写操作只认本站页面发来的（浏览器跨站请求会带别的 Origin）
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    const og = request.headers.get('origin');
+    if (og && og !== url.origin) return false;
+  }
+  return true;
 }
 // DeepSeek 官网价（空闲时段，元/百万 tokens；search 为元/千次成功请求）。高峰时段（北京时间工作日 9-12、14-18 点）按 peak_mult 倍
 const DEFAULT_PRICING = { flash_hit: 0.02, flash_miss: 1, flash_out: 4, pro_hit: 0.15, pro_miss: 4.5, pro_out: 13.5, peak_mult: 2, search: 5 };
@@ -342,10 +348,16 @@ function stPut(obj, key, c6, field){
   const now = Date.now();
   st[key] = { c: c6, t: now };
   // 只留 30 天内的（和预记账过期时间对齐），最多 300 条
-  for (const k of Object.keys(st)) { const v = st[k]; if (v && typeof v === 'object' && now - num0(v.t) > PEND_TTL * 1000) delete st[k]; }
+  for (const k of Object.keys(st)) { const v = st[k]; if (v && typeof v === 'object' && now - num0(v.t) > (PEND_TTL + 24 * 3600) * 1000) delete st[k]; }
   const ks = Object.keys(st);
   if (field === 'st' && ks.length > 300) for (const k of ks.slice(0, ks.length - 300)) delete st[k];
   obj[field] = st;
+}
+function markHas(m, k){ return !!(m && k && ((Array.isArray(m.p) && m.p.indexOf(k) >= 0) || (Array.isArray(m.s) && m.s.indexOf(k) >= 0))); }
+// 已删账号名下记完一笔后，把编号补进删除标记，之后同一编号再来就跳过（尽力写，失败不影响）
+async function markAdd(kv, mkKey, mk, k){
+  if (!mk || !k) return;
+  try { const m = JSON.parse(mk); if (markHas(m, k)) return; m.s = (Array.isArray(m.s) ? m.s : []).concat([k]); await kv.put(mkKey, JSON.stringify(m), { expirationTtl: PEND_TTL + 24 * 3600 }); } catch(e){}
 }
 function stVal(v){ return v && typeof v === 'object' ? num0(v.c) : num0(v); }
 // 已删账号残留的 tokens_ 折算成金额：删号时已按估算并进合计的预记账（删除标记 p 里有），扣掉那笔估算
@@ -407,13 +419,16 @@ async function recordUsage(kv, uname, model, usage, searched, pricing, now, opts
   }
   if (gone) {
     // 删除时已并入合计的预记账（记在删除标记里），只补差额；已转正进已删合计的，由 takeKey 扣掉
-    let prepaid = 0;
-    if (opts.pendKey && mk) { try { const m = JSON.parse(mk); if (Array.isArray(m.p) && m.p.indexOf(opts.pendKey) >= 0) prepaid = num0(opts.pendC6); } catch(e){} }
+    let prepaid = 0, m = null;
+    const mkKey = 'udel_' + uname + '_' + opts.gen;
+    if (mk) { try { m = JSON.parse(mk); } catch(e){} }
+    if (opts.pendKey && markHas(m, opts.pendKey)) prepaid = num0(opts.pendC6);
     try {
-      // 删号时这笔预记账已并进合计（删除标记里有编号）：转正直接跳过
-      if (opts.settleKey && mk) { try { const m = JSON.parse(mk); if (Array.isArray(m.p) && m.p.indexOf(opts.settleKey) >= 0) return true; } catch(e){} }
-      if (opts.settleKey) return await addDeletedCost(kv, delta, 0, { stKey: opts.settleKey }) || true;
+      // 删号时这笔预记账已并进合计或早已记过账（删除标记里有编号）：转正直接跳过
+      if (opts.settleKey && markHas(m, opts.settleKey)) return true;
+      if (opts.settleKey) { await addDeletedCost(kv, delta, 0, { stKey: opts.settleKey }); await markAdd(kv, mkKey, mk, opts.settleKey); return true; }
       await addDeletedCost(kv, delta - prepaid, 0, prepaid ? {} : { takeKey: opts.pendKey });
+      if (opts.pendKey) await markAdd(kv, mkKey, mk, opts.pendKey);
       return true;
     } catch(e){ return false; }
   }
@@ -647,16 +662,18 @@ async function handleAdminDeleteUser(request, env){
   for (const u of unames) {
     let g = 'g0';
     try { const ur = await kv.get('user_' + u); if (ur) g = genOf(ur); } catch(e){}
-    let pl = [], stk = [];
+    let pl = [], done = [];
     try { pl = await listPending(kv, 'pend_' + u + '_'); } catch(e){}
-    try { const tr = await kv.get('tokens_' + u); if (tr) { const to = JSON.parse(tr); if (to && to.v2 && to.v2.st) stk = Object.keys(to.v2.st); } } catch(e){}
-    info.push({ u: u, g: g, pl: pl, stk: stk });
+    // 已经记过账的编号：st（按估算转正过）、pp（按实际记过）。这些预记账的钱已经在 tokens_ 里，不再加估算
+    try { const tr = await kv.get('tokens_' + u); if (tr) { const to = JSON.parse(tr); if (to && to.v2) done = Object.keys(to.v2.st || {}).concat(Object.keys(to.v2.pp || {})); } } catch(e){}
+    pl = pl.filter(function(q){ return done.indexOf(q.name) < 0; }).concat(pl.filter(function(q){ return done.indexOf(q.name) >= 0; }).map(function(q){ return Object.assign({}, q, { done: true }); }));
+    info.push({ u: u, g: g, pl: pl, done: done });
   }
   const marked = [];
   const unmark = async function(){ for (const k of marked) { try { await kv.delete(k); } catch(e){} } };
   for (const x of info) {
     const mk = 'udel_' + x.u + '_' + x.g;
-    try { await kv.put(mk, JSON.stringify({ t: Date.now(), p: x.pl.map(function(q){ return q.name; }).concat(x.stk) }), { expirationTtl: PEND_TTL + 24 * 3600 }); marked.push(mk); }
+    try { await kv.put(mk, JSON.stringify({ t: Date.now(), p: x.pl.filter(function(q){ return !q.done; }).map(function(q){ return q.name; }), s: x.done }), { expirationTtl: PEND_TTL + 24 * 3600 }); marked.push(mk); }
     catch(e){ await unmark(); return json({ ok: false, error: '删除标记写入失败，没有删除，请稍后重试' }, 500); }
   }
   // 2) 汇总这批用户的消耗（含预记账），一次写入合计；写失败就整批不删
@@ -664,7 +681,7 @@ async function handleAdminDeleteUser(request, env){
   const pendNames = [];
   for (const x of info) {
     try { const tr = await kv.get('tokens_' + x.u); if (tr) { sum += Math.round(calcCost(JSON.parse(tr), pricing).cost * 1e6); n++; } } catch(e){}
-    for (const q of x.pl) { sum += q.c6; pendNames.push(q.name); }
+    for (const q of x.pl) { if (!q.done) sum += q.c6; pendNames.push(q.name); }
   }
   try { if (sum || n) await addDeletedCost(kv, sum, n); }
   catch(e){
