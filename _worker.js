@@ -356,6 +356,7 @@ async function recordUsage(kv, uname, model, usage, searched, pricing, now, opts
   const tier = modelTier(model);
   const peak = isPeakTime(now, pricing.holidays);
   let delta = Math.round(num0(opts.extra6)), hit = 0, miss = 0, pt = 0, ct = 0;
+  let settledAdj = 0;
   if (searched) delta += Math.round(num0(pricing.search) / 1000 * 1e6);
   if (usage) {
     pt = num0(usage.prompt_tokens); ct = num0(usage.completion_tokens);
@@ -377,11 +378,14 @@ async function recordUsage(kv, uname, model, usage, searched, pricing, now, opts
       } catch(e){}
     }
   }
+  // 预记账已按估算转正过：扣掉估算，只记差额（转正时账号还在就记在账号上，已删就记在已删合计里，扣的地方随下面的分支走）
+  if (opts.settled && !gone) { settledAdj = Math.round(num0(opts.pendC6)); delta -= settledAdj; }
   if (gone) {
-    // 删除时已经把这笔预记账并进了合计，这里只补差额
+    // 删除时已经把这笔预记账并进了合计（或已转正进了已删合计），这里只补差额
     let prepaid = 0;
     if (opts.pendKey) {
       try { const mk = await kv.get('udel_' + uname + '_' + opts.gen); if (mk) { const m = JSON.parse(mk); if (Array.isArray(m.p) && m.p.indexOf(opts.pendKey) >= 0) prepaid = num0(opts.pendC6); } } catch(e){}
+      if (!prepaid && opts.settled) prepaid = num0(opts.pendC6);
     }
     try { if (delta - prepaid) await addDeletedCost(kv, delta - prepaid, 0); return true; } catch(e){ return false; }
   }
@@ -408,6 +412,7 @@ async function recordUsage(kv, uname, model, usage, searched, pricing, now, opts
   if (searched) o.v2.search = num0(o.v2.search) + 1;
   o.v2.c6 = num0(o.v2.c6) + delta;
   if (opts.extra6) o.v2.e6 = num0(o.v2.e6) + Math.round(num0(opts.extra6));
+  if (settledAdj) o.v2.e6 = Math.max(0, num0(o.v2.e6) - settledAdj);
   if (usage) {
     const slot = peak ? 'pk' : 'op';
     const b = o.v2[tier] || (o.v2[tier] = {});
@@ -680,7 +685,10 @@ async function handleChat(request, env, ctx) {
     billed = true;
     const pr = (async function(){
       let ok = true;
-      if (usage && typeof usage === 'object') ok = await recordUsage(kv, username, model, usage, searched, pricing0, t0, { gen: gen0, pendKey: pendKey, pendC6: pendC6 });
+      // 幂等：预记账已被后台按估算转正（key 没了、也不在删除名单里），这次只补差额
+      let settled = false;
+      if (pendKey) { try { await pendP; settled = !(await kv.get(pendKey)); } catch(e){} }
+      if (usage && typeof usage === 'object') ok = await recordUsage(kv, username, model, usage, searched, pricing0, t0, { gen: gen0, pendKey: pendKey, pendC6: pendC6, settled: settled });
       else if (usage === 'fail') { if (searched) ok = await recordUsage(kv, username, model, null, true, pricing0, t0, { gen: gen0, pendKey: pendKey, pendC6: pendKey ? pendC6 : 0 }); }
       else return;
       if (ok && pendKey) { try { await pendP; } catch(e){} try { await kv.delete(pendKey); } catch(e){} }
