@@ -79,11 +79,11 @@ test('登录：JSON + 同源，下发 HttpOnly Secure SameSite=Strict 12 小时 
   assert.ok(!sc.includes(KEY));
 });
 
-test('登录：同一 IP（IPv6 /64）错 10 次锁定，计数键带本站域名', async () => {
+test('登录：同一 IP（IPv6 /64）错 10 次锁定，计数键不带域名（预览域名共用）', async () => {
   const env = makeEnv();
   for (let i = 0; i < 10; i++) assert.equal((await call(env, '/api/admin/login', { method: 'POST', body: { key: 'x' }, headers: { origin: SELF }, ip: '2001:db8:5:6::' + (i + 1) })).status, 403);
   assert.equal((await call(env, '/api/admin/login', { method: 'POST', body: { key: KEY }, headers: { origin: SELF }, ip: '2001:db8:5:6::99' })).status, 429);
-  assert.ok(env.FEEDBACK_KV.m.has('admfail_deepseekchatkele.pages.dev_2001:db8:5:6::/64'));
+  assert.ok(env.FEEDBACK_KV.m.has('admfail_deepseekchatkele_2001:db8:5:6::/64'));
   assert.equal((await call(env, '/api/admin/login', { method: 'POST', body: { key: KEY }, headers: { origin: SELF }, ip: '198.51.100.1' })).status, 200);
 });
 
@@ -106,15 +106,6 @@ test('后台接口：?key= 不再有效，只认 Cookie；写操作要求同源'
   const exp = Math.floor(Date.now() / 1000) + 100;
   assert.equal((await call(env, '/api/admin/feedbacks', { cookie: 'dsk_admin=' + exp + '.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' })).status, 403);
   assert.equal((await call(env, '/api/admin/feedbacks', { cookie: 'dsk_admin=' + (exp - 1000) + '.' + cookie.split('.')[1] })).status, 403);
-});
-
-test('小游戏后台（tp0k/zhijia/brake）跨站 ?key= 保持可用', async () => {
-  const env = makeEnv();
-  const r = await call(env, '/api/admin/zhijia/board?key=' + KEY, { headers: { origin: 'https://game.example' } });
-  const j = await r.json().catch(() => ({}));
-  assert.notEqual(j.error, '无权');
-  const bad = await call(env, '/api/admin/zhijia/board?key=wrong', { headers: { origin: 'https://game.example' } });
-  assert.equal((await bad.json()).error, '无权');
 });
 
 test('/admin：旧书签 ?key= 换 Cookie 并跳转去掉密码；跨站带来的不校验；页面不再拼 ?key=', async () => {
@@ -173,8 +164,8 @@ test('附件：白名单类型内联，SVG 强制下载；nosniff + sandbox + �
 });
 
 /* ---------- 提交 ---------- */
-const ZJ = 'https://zhijia-game.example';
-test('智驾 / 刹车跨站提交仍然可用（未核实域名时默认放行游戏标签），回显 Origin 不用 *，并记录来源', async () => {
+const ZJ = 'https://zhijiamoniqi.pages.dev';
+test('智驾跨站提交可用（zhijiamoniqi.pages.dev 及预览子域），回显 Origin 不用 *，并记录来源', async () => {
   const env = makeEnv();
   const pre = await call(env, '/api/feedback', { method: 'OPTIONS', headers: { origin: ZJ, 'access-control-request-method': 'POST' } });
   assert.equal(pre.status, 204);
@@ -185,28 +176,118 @@ test('智驾 / 刹车跨站提交仍然可用（未核实域名时默认放行�
   const rec = [...env.FEEDBACK_KV.m.entries()].filter(([k]) => k.startsWith('fb_')).map(([, v]) => JSON.parse(v)).find((x) => x.site === '[智驾站]');
   assert.equal(rec.origin, ZJ);
   assert.equal(rec.text, '【其他】测试');
-  const b = await call(env, '/api/feedback', { method: 'POST', body: { site: '[刹车站]', text: 'brake' }, headers: { origin: 'https://brake.example' }, ip: '198.51.100.7' });
-  assert.equal(b.status, 200);
+  const pv = await call(env, '/api/feedback', { method: 'POST', body: { site: '[智驾站]', text: 'preview' }, headers: { origin: 'https://abc123.zhijiamoniqi.pages.dev' }, ip: '198.51.100.7' });
+  assert.equal(pv.status, 200);
+  assert.equal(pv.headers.get('access-control-allow-origin'), 'https://abc123.zhijiamoniqi.pages.dev');
+  // http 或仿冒域名不算
+  for (const o of ['http://zhijiamoniqi.pages.dev', 'https://zhijiamoniqi.pages.dev.evil.example', 'https://evilzhijiamoniqi.pages.dev']) {
+    const x = await call(env, '/api/feedback', { method: 'OPTIONS', headers: { origin: o } });
+    assert.equal(x.status, 403, o);
+    assert.equal(x.headers.get('access-control-allow-origin'), null, o);
+  }
 });
 
-test('DeepSeek 站反馈只能来自本站页面；强制模式下未知来源被拒绝', async () => {
+test('默认强制白名单：未知来源预检 / 提交都被拒；刹车站跨站关闭；DeepSeek 站只收本站', async () => {
   const env = makeEnv();
-  const r = await call(env, '/api/feedback', { method: 'POST', body: { text: 'x' }, headers: { origin: 'https://evil.example' } });
-  assert.equal(r.status, 403);
-  assert.equal(r.headers.get('access-control-allow-origin'), 'https://evil.example'); // 允许读到错误信息，但没写入
-  assert.ok(![...env.FEEDBACK_KV.m.keys()].some((k) => k.startsWith('fb_') && k !== 'fb_1731000000000abc'));
-  const env2 = makeEnv({ FEEDBACK_CORS_ENFORCE: '1', FEEDBACK_ALLOWED_ORIGINS: 'https://zhijia-ok.example' });
-  const pre = await call(env2, '/api/feedback', { method: 'OPTIONS', headers: { origin: ZJ } });
+  const pre = await call(env, '/api/feedback', { method: 'OPTIONS', headers: { origin: 'https://evil.example' } });
   assert.equal(pre.status, 403);
   assert.equal(pre.headers.get('access-control-allow-origin'), null);
-  const p2 = await call(env2, '/api/feedback', { method: 'POST', body: { site: '[智驾站]', text: 'x' }, headers: { origin: ZJ } });
-  assert.equal(p2.status, 403);
-  const ok = await call(env2, '/api/feedback', { method: 'POST', body: { site: '[智驾站]', text: 'x' }, headers: { origin: 'https://zhijia-ok.example' } });
-  assert.equal(ok.status, 200);
-  const prev = await call(env2, '/api/feedback', { method: 'OPTIONS', headers: { origin: 'https://abc123.deepseekchatkele.pages.dev' } });
-  assert.equal(prev.headers.get('access-control-allow-origin'), 'https://abc123.deepseekchatkele.pages.dev');
-  const same = await call(env2, '/api/feedback', { method: 'POST', body: { text: '本站' }, headers: { origin: SELF }, ip: '198.51.100.8' });
+  const r = await call(env, '/api/feedback', { method: 'POST', body: { site: '[智驾站]', text: 'x' }, headers: { origin: 'https://evil.example' } });
+  assert.equal(r.status, 403);
+  assert.equal(r.headers.get('access-control-allow-origin'), null);
+  // 刹车模拟器已下线：即使来自白名单来源，刹车站标签的跨站提交也拒绝
+  const br = await call(env, '/api/feedback', { method: 'POST', body: { site: '[刹车站]', text: 'brake' }, headers: { origin: ZJ } });
+  assert.equal(br.status, 403);
+  // DeepSeek 站标签只能来自本站
+  const ds = await call(env, '/api/feedback', { method: 'POST', body: { text: 'x' }, headers: { origin: ZJ } });
+  assert.equal(ds.status, 403);
+  assert.ok(![...env.FEEDBACK_KV.m.keys()].some((k) => k.startsWith('fb_') && k !== 'fb_1731000000000abc'));
+  // 本站 + 本站预览子域
+  const same = await call(env, '/api/feedback', { method: 'POST', body: { text: '本站' }, headers: { origin: SELF }, ip: '198.51.100.8' });
   assert.equal(same.status, 200);
+  const prev = await call(env, '/api/feedback', { method: 'OPTIONS', headers: { origin: 'https://abc123.deepseekchatkele.pages.dev' } });
+  assert.equal(prev.headers.get('access-control-allow-origin'), 'https://abc123.deepseekchatkele.pages.dev');
+});
+
+test('FEEDBACK_ALLOWED_ORIGINS 可追加来源；FEEDBACK_CORS_ENFORCE=0 是应急放行开关', async () => {
+  const env = makeEnv({ FEEDBACK_ALLOWED_ORIGINS: 'https://zhijia-mirror.example' });
+  const ok = await call(env, '/api/feedback', { method: 'POST', body: { site: '[智驾站]', text: 'x' }, headers: { origin: 'https://zhijia-mirror.example' } });
+  assert.equal(ok.status, 200);
+  const off = makeEnv({ FEEDBACK_CORS_ENFORCE: '0' });
+  const pre = await call(off, '/api/feedback', { method: 'OPTIONS', headers: { origin: 'https://other.example' } });
+  assert.equal(pre.status, 204);
+});
+
+/* ---------- 小游戏后台 ---------- */
+test('智驾后台：从 zhijiamoniqi.pages.dev 跨站带 ?key= 仍可用，回显 Origin', async () => {
+  const env = makeEnv();
+  const pre = await call(env, '/api/admin/zhijia/board', { method: 'OPTIONS', headers: { origin: ZJ, 'access-control-request-method': 'POST' } });
+  assert.equal(pre.status, 204);
+  assert.equal(pre.headers.get('access-control-allow-origin'), ZJ);
+  const r = await call(env, '/api/admin/zhijia/board?key=' + KEY, { headers: { origin: ZJ } });
+  const j = await r.json().catch(() => ({}));
+  assert.notEqual(r.status, 403);
+  assert.notEqual(j.error, '无权');
+  assert.equal(r.headers.get('access-control-allow-origin'), ZJ);
+  const bad = await call(env, '/api/admin/zhijia/board?key=wrong', { headers: { origin: ZJ } });
+  assert.equal(bad.status, 403);
+  assert.equal((await bad.json()).error, '无权');
+  assert.equal(bad.headers.get('access-control-allow-origin'), ZJ, '错误信息要能被智驾后台读到');
+});
+
+test('小游戏后台 CORS：未知来源被拒；刹车 / tp0k 后台只允许同源', async () => {
+  const env = makeEnv();
+  for (const p of ['/api/admin/zhijia/board', '/api/admin/brake/runs', '/api/admin/tp0k/board']) {
+    const pre = await call(env, p, { method: 'OPTIONS', headers: { origin: 'https://evil.example' } });
+    assert.equal(pre.status, 403, p);
+    assert.equal(pre.headers.get('access-control-allow-origin'), null, p);
+    const r = await call(env, p + '?key=' + KEY, { headers: { origin: 'https://evil.example' } });
+    assert.equal(r.status, 403, p);
+    assert.equal(r.headers.get('access-control-allow-origin'), null, p);
+  }
+  for (const p of ['/api/admin/brake/runs', '/api/admin/tp0k/board', '/api/admin/brake/reset']) {
+    const r = await call(env, p + '?key=' + KEY, { method: p.endsWith('reset') ? 'POST' : 'GET', headers: { origin: ZJ } });
+    assert.equal(r.status, 403, p);
+    assert.equal(r.headers.get('access-control-allow-origin'), null, p);
+  }
+  // 跨站被拒的请求不计入输错次数（不比对密码）
+  assert.ok(![...env.FEEDBACK_KV.m.keys()].some((k) => k.startsWith('admfail_')));
+  // 同源（DeepSeek 后台本站）不受影响
+  const same = await call(env, '/api/admin/brake/runs?key=' + KEY, { headers: { origin: SELF } });
+  assert.notEqual((await same.json().catch(() => ({}))).error, '来源不被允许');
+});
+
+test('小游戏后台 ?key= 输错计入同一个锁定计数：先查锁定再比对，锁定后正确密码也 429', async () => {
+  const env = makeEnv();
+  for (let i = 0; i < 6; i++) assert.equal((await call(env, '/api/admin/zhijia/records?key=bad' + i, { headers: { origin: ZJ }, ip: '2001:db8:7:8::' + (i + 1) })).status, 403);
+  // 和后台登录共用计数
+  for (let i = 0; i < 4; i++) assert.equal((await call(env, '/api/admin/login', { method: 'POST', body: { key: 'bad' }, headers: { origin: SELF }, ip: '2001:db8:7:8::a' + i })).status, 403);
+  assert.equal(env.FEEDBACK_KV.m.get('admfail_deepseekchatkele_2001:db8:7:8::/64'), '10');
+  const locked = await call(env, '/api/admin/zhijia/board?key=' + KEY, { headers: { origin: ZJ }, ip: '2001:db8:7:8::ff' });
+  assert.equal(locked.status, 429);
+  assert.equal(locked.headers.get('access-control-allow-origin'), ZJ);
+  assert.equal((await call(env, '/api/admin/login', { method: 'POST', body: { key: KEY }, headers: { origin: SELF }, ip: '2001:db8:7:8::fe' })).status, 429);
+  assert.equal((await call(env, '/admin?key=' + encodeURIComponent(KEY), { ip: '2001:db8:7:8::fd' })).headers.get('location'), '/admin?err=locked');
+  // 锁定期间不再比对、不再增加计数
+  assert.equal(env.FEEDBACK_KV.m.get('admfail_deepseekchatkele_2001:db8:7:8::/64'), '10');
+  // 其他 IP 不受影响
+  const other = await call(env, '/api/admin/zhijia/board?key=' + KEY, { headers: { origin: ZJ }, ip: '198.51.100.50' });
+  assert.notEqual(other.status, 429);
+  assert.notEqual(other.status, 403);
+});
+
+test('GAME_ADMIN_KEY：设置后小游戏后台改用它，主密码不再能用于小游戏后台；没设置时沿用主密码', async () => {
+  const env = makeEnv({ GAME_ADMIN_KEY: 'game-key-not-real' });
+  const g = await call(env, '/api/admin/zhijia/board?key=game-key-not-real', { headers: { origin: ZJ } });
+  assert.notEqual(g.status, 403);
+  const m = await call(env, '/api/admin/zhijia/board?key=' + KEY, { headers: { origin: ZJ } });
+  assert.equal(m.status, 403);
+  // 小游戏密钥不能登录 DeepSeek 后台
+  assert.equal((await call(env, '/api/admin/login', { method: 'POST', body: { key: 'game-key-not-real' }, headers: { origin: SELF } })).status, 403);
+  // DeepSeek 后台登录 Cookie 在同源下也能用小游戏后台
+  const cookie = await login(env);
+  const c = await call(env, '/api/admin/zhijia/board', { cookie, headers: { origin: SELF } });
+  assert.notEqual(c.status, 403);
 });
 
 test('提交：问题类型 / 链接单独存；来源页面只收 http/https', async () => {

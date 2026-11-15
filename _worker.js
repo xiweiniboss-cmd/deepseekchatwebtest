@@ -69,13 +69,16 @@ async function adminSetCookie(env) {
 function adminClearCookie() {
   return ADMIN_COOKIE + '=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict';
 }
-// 校验登录密码（带失败次数限制）：失败计数键带本站域名，和共用 KV 的其他站分开
-async function adminCheckPassword(request, env, key) {
-  const secret = String((env && env.FEEDBACK_ADMIN_KEY) || '').trim();
+// 校验密码（带失败次数限制）：后台登录、/admin?key= 兑换、小游戏后台 ?key= 共用一个计数；
+// 计数键不带域名（每个预览部署域名都不一样，按域名分开会被绕过），但带站名，和共用 KV 的其他站分开。
+// 先查是否已锁定，再比对密码。
+const ADMIN_FAIL_PREFIX = 'admfail_deepseekchatkele_';
+async function adminCheckPassword(request, env, key, secretOverride) {
+  const secret = String(secretOverride || (env && env.FEEDBACK_ADMIN_KEY) || '').trim();
   if (!secret) return { ok: false, status: 500, error: '未配置管理密码 FEEDBACK_ADMIN_KEY' };
   const kv = env.FEEDBACK_KV;
   const ipk = ipLimitKey(request.headers.get('cf-connecting-ip') || '');
-  const fk = 'admfail_' + new URL(request.url).hostname + '_' + ipk;
+  const fk = ADMIN_FAIL_PREFIX + ipk;
   let fails = 0;
   if (kv && ipk) {
     try { fails = Number((await kv.get(fk)) || 0); } catch (e) {}
@@ -163,22 +166,28 @@ function feedbackFileResponse(obj, key) {
   h.set('Cache-Control', 'private, max-age=3600');
   return new Response(obj.body, { headers: h });
 }
-// 反馈提交的来源（CORS）：本站、本站 pages.dev 预览子域、本地调试、环境变量 FEEDBACK_ALLOWED_ORIGINS（逗号分隔）里的域名。
-// 智驾 / 刹车小游戏部署在别的域名上，具体域名还没核实：FEEDBACK_CORS_ENFORCE 不是 '1' 时，未知来源只能提交游戏站标签的反馈
-// （DeepSeek 站反馈必须来自本站页面），并在记录里留下 origin 字段，方便核实后把域名加进白名单再打开强制模式。
+// 跨站来源白名单（反馈提交 + 小游戏后台共用）：
+//   - 本站及本站 pages.dev 预览子域；
+//   - 智驾模拟器 https://zhijiamoniqi.pages.dev 及其预览子域（游戏页和后台页都在这里，已核实）；
+//   - 环境变量 FEEDBACK_ALLOWED_ORIGINS（逗号分隔）可以追加。
+// 刹车模拟器已下线：刹车站标签的跨站反馈、刹车 / tp0k 后台的跨站调用一律拒绝。
+// 默认强制白名单；只有 FEEDBACK_CORS_ENFORCE='0' 时才对未知来源放行（应急开关）。
 const FEEDBACK_SITE_ORIGINS = ['https://deepseekchatkele.pages.dev'];
+const GAME_SITE_ORIGINS = ['https://zhijiamoniqi.pages.dev'];
+function originInList(origin, list) {
+  let o;
+  try { o = new URL(origin); } catch (e) { return false; }
+  if (list.includes(origin)) return true;
+  return o.protocol === 'https:' && list.some((x) => o.hostname.endsWith('.' + new URL(x).hostname));
+}
 function feedbackOrigin(request, env) {
   const origin = request.headers.get('Origin') || '';
   const self = new URL(request.url).origin;
   if (!origin) return { origin: '', same: true, known: true, allowed: true };
   if (origin === self) return { origin, same: true, known: true, allowed: true };
-  let o = null;
-  try { o = new URL(origin); } catch (e) {}
   const extra = String((env && env.FEEDBACK_ALLOWED_ORIGINS) || '').split(',').map((x) => x.trim().replace(/\/+$/, '')).filter(Boolean);
-  const known = !!o && (FEEDBACK_SITE_ORIGINS.includes(origin) || extra.includes(origin) ||
-    (o.protocol === 'https:' && FEEDBACK_SITE_ORIGINS.some((x) => o.hostname.endsWith('.' + new URL(x).hostname))) ||
-    ((o.protocol === 'http:' || o.protocol === 'https:') && (o.hostname === 'localhost' || o.hostname === '127.0.0.1')));
-  const enforce = String((env && env.FEEDBACK_CORS_ENFORCE) || '') === '1';
+  const known = extra.includes(origin) || originInList(origin, FEEDBACK_SITE_ORIGINS) || originInList(origin, GAME_SITE_ORIGINS);
+  const enforce = String((env && env.FEEDBACK_CORS_ENFORCE) || '') !== '0';
   return { origin, same: false, known, allowed: known || !enforce };
 }
 function feedbackCors(resp, info) {
@@ -446,15 +455,21 @@ function adminPage(env){
   return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
 // 后台鉴权：DeepSeek 后台接口只认登录 Cookie（写操作还要求同源）；
-// 小游戏后台（tp0k/zhijia/brake）页面在别的域名上，跨站带 ?key= 调用（c46a270 / a58ce60），本次保持不变，也接受 Cookie
+// 小游戏后台（tp0k/zhijia/brake）：智驾后台页面在 zhijiamoniqi.pages.dev 上跨站带 ?key= 调用，所以仍接受 ?key=，
+// 但先经过 gameAdminGate()（来源白名单 + 输错锁定），这里只做比对；也接受 DeepSeek 后台的登录 Cookie
 const GAME_ADMIN_RE = /^\/api\/admin\/(tp0k|zhijia|brake)\//;
+// 小游戏后台密钥：设置了 GAME_ADMIN_KEY 就用它（和主密码分开），没设置时沿用 FEEDBACK_ADMIN_KEY
+function gameAdminSecret(env) {
+  return String((env && (env.GAME_ADMIN_KEY || env.FEEDBACK_ADMIN_KEY)) || '').trim();
+}
 async function adminAuth(request, env){
   const key = (env.FEEDBACK_ADMIN_KEY || '').trim();
   if (!key) return false;
   const url = new URL(request.url);
   if (GAME_ADMIN_RE.test(url.pathname)) {
     const q = url.searchParams.get('key');
-    if (q !== null && safeEqual(q, key)) return true;
+    const gk = gameAdminSecret(env);
+    if (q !== null && gk && safeEqual(q.trim(), gk)) return true;
     return await isAdminCookie(request, env);
   }
   if (!(await isAdminCookie(request, env))) return false;
@@ -2038,8 +2053,8 @@ async function handleFeedbackSubmit(request, env, originInfo) {
   }
   if (!text.trim()) return json({ ok: false, error: '请填写反馈内容' }, 400);
   const isGame = site === '[刹车站]' || site === '[智驾站]';
-  // DeepSeek 站反馈只能来自本站页面；别的来源只允许提交游戏站标签的反馈
-  if (!isGame && !oi.same) return json({ ok: false, error: '来源不被允许' }, 403);
+  // DeepSeek 站反馈只能来自本站页面；刹车模拟器已下线，刹车站标签也不再接受跨站提交；跨站只允许智驾站
+  if (!oi.same && site !== '[智驾站]') return json({ ok: false, error: '来源不被允许' }, 403);
   // 配额预检（刹车站）：写入配额烧完时直接提示，不再尝试注定失败的写操作；读失败时放行，走正常流程兜底
   if (isGame) {
     try {
@@ -2412,8 +2427,47 @@ async function handleFeedbackFile(request, env) {
 
 
 
+// 小游戏后台入口检查：来源白名单（只有智驾后台允许跨站；刹车 / tp0k 已下线，只允许同源）+ ?key= 输错锁定（先查锁定再比对）
+async function gameAdminGate(request, env) {
+  const url = new URL(request.url);
+  const m = url.pathname.match(GAME_ADMIN_RE);
+  const oi = feedbackOrigin(request, env);
+  const crossOk = oi.same || (m[1] === 'zhijia' && oi.allowed);
+  if (request.method === 'OPTIONS') {
+    return { resp: new Response(null, { status: crossOk ? 204 : 403, headers: {
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Max-Age': '86400',
+    } }), oi, crossOk };
+  }
+  if (!crossOk) return { resp: json({ ok: false, error: '来源不被允许' }, 403), oi, crossOk };
+  const q = url.searchParams.get('key');
+  if (q !== null && !(await isAdminCookie(request, env))) {
+    const r = await adminCheckPassword(request, env, q, gameAdminSecret(env));
+    if (!r.ok) return { resp: json({ ok: false, error: r.status === 403 ? '无权' : r.error }, r.status), oi, crossOk };
+  }
+  return { resp: null, oi, crossOk };
+}
+function gameAdminCors(resp, g) {
+  const h = new Headers(resp.headers);
+  h.delete('Access-Control-Allow-Origin');
+  if (g.oi.origin && g.crossOk) h.set('Access-Control-Allow-Origin', g.oi.origin);
+  h.append('Vary', 'Origin');
+  return new Response(resp.body, { status: resp.status, headers: h });
+}
+
 export default {
   async fetch(request, env, ctx) {
+    if (GAME_ADMIN_RE.test(new URL(request.url).pathname)) {
+      const g = await gameAdminGate(request, env);
+      if (g.resp) return gameAdminCors(g.resp, g);
+      return gameAdminCors(await routeRequest(request, env, ctx), g);
+    }
+    return routeRequest(request, env, ctx);
+  },
+};
+
+async function routeRequest(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === '/api/chat' && request.method === 'POST') return handleChat(request, env, ctx);
     if (url.pathname === '/api/auth' && request.method === 'POST') return handleAuth(request, env);
@@ -2662,5 +2716,4 @@ export default {
       return new Response(ar.body, { status: ar.status, headers: h });
     }
     return env.ASSETS.fetch(request);
-  },
-};
+}
