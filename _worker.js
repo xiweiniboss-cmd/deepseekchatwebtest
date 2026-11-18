@@ -458,6 +458,13 @@ function adminPage(env){
 // 小游戏后台（tp0k/zhijia/brake）：智驾后台页面在 zhijiamoniqi.pages.dev 上跨站带 ?key= 调用，所以仍接受 ?key=，
 // 但先经过 gameAdminGate()（来源白名单 + 输错锁定），这里只做比对；也接受 DeepSeek 后台的登录 Cookie
 const GAME_ADMIN_RE = /^\/api\/admin\/(tp0k|zhijia|brake)\//;
+// 小游戏后台密钥可以放在请求头 X-Admin-Key（推荐：不进地址栏、访问日志和 Referer），也兼容旧的 ?key=；两者都有时以请求头为准
+const GAME_ADMIN_HEADER = 'X-Admin-Key';
+function gameAdminKeyOf(request, url) {
+  const h = request.headers.get(GAME_ADMIN_HEADER);
+  if (h !== null && h.trim() !== '') return h;
+  return url.searchParams.get('key');
+}
 // 小游戏后台密钥：设置了 GAME_ADMIN_KEY 就用它（和主密码分开），没设置时沿用 FEEDBACK_ADMIN_KEY
 function gameAdminSecret(env) {
   return String((env && (env.GAME_ADMIN_KEY || env.FEEDBACK_ADMIN_KEY)) || '').trim();
@@ -467,7 +474,7 @@ async function adminAuth(request, env){
   if (!key) return false;
   const url = new URL(request.url);
   if (GAME_ADMIN_RE.test(url.pathname)) {
-    const q = url.searchParams.get('key');
+    const q = gameAdminKeyOf(request, url);
     const gk = gameAdminSecret(env);
     if (q !== null && gk && safeEqual(q.trim(), gk)) return true;
     return await isAdminCookie(request, env);
@@ -1657,6 +1664,41 @@ function zjDev(device) {
   return String(device || 'anon').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
 }
 
+// ---------- 智驾接管模拟器：成绩合理性校验（2026-11-18） ----------
+// 依据游戏前端常量（zhijiamoniqi index.html，v1 起未改）：巡航 18.3 m/s，剩余 200 m 时失控，
+// 刹车力度每秒 +1500 N、1612 N 断裂，满力度减速 11 m/s²，帧步长上限 0.05 s。
+// 理论最快刹停：力度 0→1612 N 需 1.075 s（期间降速约 5.9 m/s），再以 11 m/s² 刹完剩余约 12.4 m/s，
+// 合计约 2.20 s、刹车距离约 24.5 m（逐帧模拟 20~500 fps 均为 2.20~2.30 s，余量 ≤175.8 m）。
+// 早期版本失控时车速可能还没到 18.3 m/s，极限可再快到约 2.03 s，所以下限取 2.0 s 留余量。
+const ZJ_BRAKE_TIME_MIN = 2.0;   // 秒；低于此值物理上不可能刹停
+const ZJ_BRAKE_TIME_MAX = 30;    // 秒；沿用原上限
+const ZJ_MARGIN_MAX = 185;       // 米；失控点距柱子 200 m，减去最短刹车距离（约 20~24.5 m）再留余量
+// 接管反应：游戏允许失控前就按住刹车，此时反应 = 失控后第一帧（≤ 0.05 s，帧步长上限）；
+// 失控后才按的人类反应不可能快于 0.1 s。所以合法值为 (0, 0.05] 或 [0.1, 刹车用时]，0.05~0.1 之间不可能出现。
+const ZJ_PREHOLD_MAX = 0.05;
+const ZJ_REACTION_MIN = 0.1;
+// 第二阶段：3 秒内按顺序点 3 个随机排列的按钮，用时低于 0.3 s 视为不可能
+const ZJ_ESCAPE_MIN = 0.3;
+const ZJ_ESCAPE_MAX = 3;
+function zjIsNum(x) { return typeof x === 'number' && Number.isFinite(x); }
+// 反应时间校验：null/undefined = 没踩过刹车（记 -1）；其余必须是合法数字。返回 null 表示非法
+function zjReaction(raw, upper, required) {
+  if (raw === null || raw === undefined) return required ? null : -1;
+  if (!zjIsNum(raw)) return null;
+  if (!(raw > 0 && raw <= upper)) return null;
+  if (raw > ZJ_PREHOLD_MAX && raw < ZJ_REACTION_MIN) return null;
+  return raw;
+}
+// 昵称：去掉控制字符和 HTML 敏感字符，最多 12 字；空或命中敏感词记「无名车手」
+function zjName(raw) {
+  let n = String(raw == null ? '' : raw).replace(/[\u0000-\u001f\u007f<>"'`&\\]/g, '').trim().slice(0, 12);
+  if (!n || brakeHasSensitive(n)) n = '无名车手';
+  return n;
+}
+function zjDevice(raw) {
+  return String(raw == null ? '' : raw).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'anon';
+}
+
 // ---------- 智驾接管模拟器：记录 / 排行榜 / 后台 ----------
 // 排行榜只收困难模式（遥遥领先）胜利局；得分 = round(100000 / 刹车用时秒)，用时越短分越高
 function zhijiaBestKey(device) {
@@ -1736,18 +1778,19 @@ async function handleZhijiaScore(request, env) {
   if (!kv) return json({ error: '未启用' }, 503);
   let b = {};
   try { b = await request.json(); } catch (e) {}
-  let nickname = String(b.nickname || '').trim().slice(0, 12);
-  const device = String(b.device || '').slice(0, 64) || 'anon';
-  const brakeTime = Number(b.brakeTime);
-  const margin = Number(b.margin);
-  const reaction = (b.reaction === null || b.reaction === undefined || isNaN(Number(b.reaction))) ? -1 : Number(b.reaction);
   // 与 record 接口同口径：昵称为空或命中敏感词时不丢成绩，改记「无名车手」（菜单验名仍严格拦截，此处只兜底漏网情况）
-  if (!nickname || brakeHasSensitive(nickname)) nickname = '无名车手';
-  if (!(brakeTime > 0 && brakeTime <= 30)) return json({ error: '数据异常' }, 400);
-  if (!(margin >= 0 && margin <= 260)) return json({ error: '数据异常' }, 400);
-  if (!(reaction >= -1 && reaction <= 30)) return json({ error: '数据异常' }, 400);
+  const nickname = zjName(b.nickname);
+  const device = zjDevice(b.device);
+  const brakeTime = b.brakeTime;
+  const margin = b.margin;
+  // 必须是 JSON 数字（不接受字符串 / NaN / Infinity），且在物理可能范围内（见 ZJ_* 常量说明）
+  if (!zjIsNum(brakeTime) || !(brakeTime >= ZJ_BRAKE_TIME_MIN && brakeTime <= ZJ_BRAKE_TIME_MAX)) return json({ error: '数据异常' }, 400);
+  if (!zjIsNum(margin) || !(margin >= 0 && margin <= ZJ_MARGIN_MAX)) return json({ error: '数据异常' }, 400);
+  // 第一阶段刹停必须踩过刹车，反应时间必填，且不会晚于刹停时刻
+  const reaction = zjReaction(b.reaction, brakeTime, true);
+  if (reaction === null) return json({ error: '数据异常' }, 400);
   const baseScore = Math.round(100000 / brakeTime);
-  if (!(baseScore > 0 && baseScore <= 200000)) return json({ error: '数据异常' }, 400);
+  if (!(baseScore > 0 && baseScore <= Math.ceil(100000 / ZJ_BRAKE_TIME_MIN))) return json({ error: '数据异常' }, 400);
   const score = baseScore + 1612; // 第一阶段刹停成功奖励 1612 分（2026-10-23 定版）
   const ip = request.headers.get('cf-connecting-ip') || '';
   if (ip) {
@@ -1777,16 +1820,16 @@ async function handleZhijiaScore(request, env) {
 async function handleZhijiaScore2(request, env) {
   let b = {};
   try { b = await request.json(); } catch (e) {}
-  let nickname = String(b.nickname || '').trim().slice(0, 12);
-  const device = String(b.device || '').slice(0, 64) || 'anon';
-  const escapeTime = Number(b.escapeTime);
-  const reaction = (b.reaction === null || b.reaction === undefined || isNaN(Number(b.reaction))) ? -1 : Number(b.reaction);
-  if (!nickname || brakeHasSensitive(nickname)) nickname = '无名车手';
-  if (!(escapeTime > 0 && escapeTime <= 3)) return json({ error: '数据异常' }, 400);
-  if (!(reaction >= -1 && reaction <= 30)) return json({ error: '数据异常' }, 400);
+  const nickname = zjName(b.nickname);
+  const device = zjDevice(b.device);
+  const escapeTime = b.escapeTime;
+  if (!zjIsNum(escapeTime) || !(escapeTime >= ZJ_ESCAPE_MIN && escapeTime <= ZJ_ESCAPE_MAX)) return json({ error: '数据异常' }, 400);
+  // 撞车局可能全程没踩刹车（null → -1）；踩过的话按同样规则校验
+  const reaction = zjReaction(b.reaction, ZJ_BRAKE_TIME_MAX, false);
+  if (reaction === null) return json({ error: '数据异常' }, 400);
   // 急救得分 = 剩余时间每 0.01 秒 1000 分（2026-10-23 定版）；压线完成保底 1000 分
   const score = Math.max(1, Math.round((3 - escapeTime) * 100)) * 1000;
-  if (!(score > 0 && score <= 300000)) return json({ error: '数据异常' }, 400);
+  if (!(score > 0 && score <= Math.round((3 - ZJ_ESCAPE_MIN) * 100) * 1000)) return json({ error: '数据异常' }, 400);
   const kv = env.FEEDBACK_KV;
   const ip = request.headers.get('cf-connecting-ip') || '';
   if (ip && kv) {
@@ -1818,19 +1861,22 @@ async function handleZhijiaRecord(request, env) {
   if (!kv) return json({ error: '未启用' }, 503);
   let b = {};
   try { b = await request.json(); } catch (e) {}
-  let nickname = String(b.nickname || '').trim().slice(0, 12);
-  if (!nickname || brakeHasSensitive(nickname)) nickname = '无名车手';
-  const device = String(b.device || '').slice(0, 64) || 'anon';
-  const mode = b.mode === 'easy' ? 'easy' : 'hard';
-  const results = ['win', 'snap', 'burned', 'news', 'survive'];
-  const result = results.indexOf(String(b.result || '')) >= 0 ? String(b.result) : 'snap';
-  const num = function (x, max) { const n = Number(x); return (isFinite(n) && n >= 0 && n <= max) ? n : 0; };
+  const nickname = zjName(b.nickname);
+  const device = zjDevice(b.device);
+  // mode / result 只收前端实际会发的值（index.html reportRun 的全部调用：win / snap / burned / news / survive），其余直接拒绝
+  const MODES = ['easy', 'hard'];
+  const RESULTS = ['win', 'snap', 'burned', 'news', 'survive'];
+  if (MODES.indexOf(b.mode) < 0 || RESULTS.indexOf(b.result) < 0) return json({ error: '数据异常' }, 400);
+  const mode = b.mode;
+  const result = b.result;
+  // 数值字段：必须是有限 JSON 数字，超出范围按 0 记（记录只给后台看，不影响排行榜）
+  const num = function (x, max) { return (zjIsNum(x) && x >= 0 && x <= max) ? x : 0; };
   const brakeTime = num(b.brakeTime, 60);
-  const reaction = (b.reaction === null || b.reaction === undefined || isNaN(Number(b.reaction))) ? -1 : num(b.reaction, 60);
-  const maxForce = num(b.maxForce, 3000);
-  const maxSpeed = num(b.maxSpeed, 200);
-  const margin = num(b.margin, 300);
-  const escT = num(b.escapeTime, 10);
+  const reaction = (b.reaction === null || b.reaction === undefined) ? -1 : (zjIsNum(b.reaction) && b.reaction > 0 && b.reaction <= 60 ? b.reaction : -1);
+  const maxForce = num(b.maxForce, 1800);   // 1612 N 断裂，前端上限 1612+120
+  const maxSpeed = num(b.maxSpeed, 160);    // km/h，困难模式极速 139
+  const margin = num(b.margin, 400);        // 米，不超过整条路线长度
+  const escT = num(b.escapeTime, ZJ_ESCAPE_MAX);
   const ip = request.headers.get('cf-connecting-ip') || '';
   if (ip && !(await brakeRateLimit(kv, ip))) {
     return json({ error: '手速太快了，歇一会儿再战' }, 429);
@@ -2427,7 +2473,7 @@ async function handleFeedbackFile(request, env) {
 
 
 
-// 小游戏后台入口检查：来源白名单（只有智驾后台允许跨站；刹车 / tp0k 已下线，只允许同源）+ ?key= 输错锁定（先查锁定再比对）
+// 小游戏后台入口检查：来源白名单（只有智驾后台允许跨站；刹车 / tp0k 已下线，只允许同源）+ 密钥（X-Admin-Key 头或 ?key=）输错锁定（先查锁定再比对）
 async function gameAdminGate(request, env) {
   const url = new URL(request.url);
   const m = url.pathname.match(GAME_ADMIN_RE);
@@ -2436,12 +2482,12 @@ async function gameAdminGate(request, env) {
   if (request.method === 'OPTIONS') {
     return { resp: new Response(null, { status: crossOk ? 204 : 403, headers: {
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': 'Content-Type, ' + GAME_ADMIN_HEADER,
       'Access-Control-Max-Age': '86400',
     } }), oi, crossOk };
   }
   if (!crossOk) return { resp: json({ ok: false, error: '来源不被允许' }, 403), oi, crossOk };
-  const q = url.searchParams.get('key');
+  const q = gameAdminKeyOf(request, url);
   if (q !== null && !(await isAdminCookie(request, env))) {
     const r = await adminCheckPassword(request, env, q, gameAdminSecret(env));
     if (!r.ok) return { resp: json({ ok: false, error: r.status === 403 ? '无权' : r.error }, r.status), oi, crossOk };
